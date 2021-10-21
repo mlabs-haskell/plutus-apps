@@ -173,7 +173,7 @@ appEffectHandlers storageBackend config trace BuiltinHandler{contractHandler} =
             . flip handleError (throwError . WalletError)
             . interpret (Core.handleUserEnvReader @(Builtin a) @(AppEnv a))
             . reinterpret (Core.handleMappedReader @(AppEnv a) @ClientEnv walletClientEnv)
-            . reinterpretN @'[_, _, _] (handleWalletEffect (mscNodeMode $ nodeServerConfig config) wallet)
+            . reinterpretN @'[_, _, _] (handleWalletEffect (nodeServerConfig config) wallet)
 
         , onStartup = pure ()
 
@@ -187,12 +187,12 @@ handleWalletEffect
   , Member (Error WalletAPIError) effs
   , Member (Reader ClientEnv) effs
   )
-  => NodeMode
+  => MockServerConfig
   -> Wallet
   -> WalletEffect
   ~> Eff effs
-handleWalletEffect MockNode   = WalletMockClient.handleWalletClient @IO
-handleWalletEffect AlonzoNode = WalletClient.handleWalletClient
+handleWalletEffect (mscNodeMode -> MockNode)          = WalletMockClient.handleWalletClient @IO
+handleWalletEffect config@(mscNodeMode -> AlonzoNode) = WalletClient.handleWalletClient config
 
 runApp ::
     forall a b.
