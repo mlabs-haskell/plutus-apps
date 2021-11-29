@@ -22,7 +22,7 @@ import           Data.ByteString.Lazy.Char8 (pack)
 import           Data.Default               (Default (..))
 import           Data.Foldable              (fold)
 import qualified Data.Set                   as Set
-import           Hedgehog                   (Property, forAll, property)
+import           Hedgehog                   (Property, forAll, property, (===))
 import qualified Hedgehog
 import qualified Hedgehog.Gen               as Gen
 import qualified Hedgehog.Range             as Range
@@ -34,8 +34,9 @@ import qualified Ledger.Index               as Index
 import           Ledger.Typed.Scripts       (wrapValidator)
 import qualified Ledger.Value               as Value
 import           Plutus.Contract.Test       hiding (not)
-import           Plutus.Trace               (EmulatorTrace, PrintEffect (..))
+import           Plutus.Trace               (EmulatorTrace, PrintEffect (..), runEmulatorTrace)
 import qualified Plutus.Trace               as Trace
+import           Plutus.Trace.Emulator      (concludeEmulatorTrace, continueEmulatorTrace, prerunEmulatorTrace)
 import qualified PlutusTx
 import qualified PlutusTx.Numeric           as P
 import qualified PlutusTx.Prelude           as PlutusTx
@@ -51,39 +52,42 @@ import qualified Wallet.Graph
 
 tests :: TestTree
 tests = testGroup "all tests" [
-    testGroup "UTXO model" [
-        testProperty "compute UTxO of trivial blockchain" utxo,
-        testProperty "validate transaction" txnValid,
-        testProperty "validate transaction when it can be validated" txnValidFrom,
-        testProperty "update UTXO set after each transaction" txnUpdateUtxo
-        ],
-    testGroup "traces" [
-        testProperty "accept valid txn" validTrace,
-        testProperty "accept valid txn 2" validTrace2,
-        testProperty "reject invalid txn" invalidTrace,
-        testProperty "notify wallet" notifyWallet,
-        testProperty "log script validation failures" invalidScript,
-        testProperty "payToPubkey" payToPubKeyScript,
-        testProperty "payToPubkey-2" payToPubKeyScript2
-        ],
-    testGroup "trace output" [
-        goldenVsString
-          "captures a trace of a wait"
-          "test/Spec/golden/traceOutput - wait1.txt"
-          (pure $ captureTrace (void $ Trace.waitNSlots 1)),
-        goldenVsString
-          "captures a trace of pubKeytransactions"
-          "test/Spec/golden/traceOutput - pubKeyTransactions.txt"
-          (pure $ captureTrace pubKeyTransactions),
-        goldenVsString
-          "captures a trace of pubKeytransactions2"
-          "test/Spec/golden/traceOutput - pubKeyTransactions2.txt"
-          (pure $ captureTrace pubKeyTransactions2)
-    ],
-    testGroup "Etc." [
-        testProperty "selectCoin" selectCoinProp,
-        testProperty "txnFlows" txnFlowsTest
+    -- testGroup "UTXO model" [
+    --     testProperty "compute UTxO of trivial blockchain" utxo,
+    --     testProperty "validate transaction" txnValid,
+    --     testProperty "validate transaction when it can be validated" txnValidFrom,
+    --     testProperty "update UTXO set after each transaction" txnUpdateUtxo
+    --     ],
+    -- testGroup "traces" [
+    --     testProperty "accept valid txn" validTrace,
+    --     testProperty "accept valid txn 2" validTrace2,
+    --     testProperty "reject invalid txn" invalidTrace,
+    --     testProperty "notify wallet" notifyWallet,
+    --     testProperty "log script validation failures" invalidScript,
+    --     testProperty "payToPubkey" payToPubKeyScript,
+    --     testProperty "payToPubkey-2" payToPubKeyScript2
+    --     ],
+    -- testGroup "trace output" [
+    --     goldenVsString
+    --       "captures a trace of a wait"
+    --       "test/Spec/golden/traceOutput - wait1.txt"
+    --       (pure $ captureTrace (void $ Trace.waitNSlots 1)),
+    --     goldenVsString
+    --       "captures a trace of pubKeytransactions"
+    --       "test/Spec/golden/traceOutput - pubKeyTransactions.txt"
+    --       (pure $ captureTrace pubKeyTransactions),
+    --     goldenVsString
+    --       "captures a trace of pubKeytransactions2"
+    --       "test/Spec/golden/traceOutput - pubKeyTransactions2.txt"
+    --       (pure $ captureTrace pubKeyTransactions2)
+    --     ],
+    testGroup "snapshots" [
+        testProperty "compound trace equals whole trace" compoundTrace
         ]
+    -- testGroup "Etc." [
+    --     testProperty "selectCoin" selectCoinProp,
+    --     testProperty "txnFlows" txnFlowsTest
+    --     ]
     ]
 
 captureTrace
@@ -279,6 +283,18 @@ payToPubKeyScript2 =
             .&&. hasInitialBalance wallet2
             .&&. hasInitialBalance wallet3)
         pubKeyTransactions2
+
+compoundTrace :: Property
+compoundTrace = property $ do
+    -- (Mockchain m _, txn) <- forAll genChainTxn
+    let conf = def -- & Trace.initialChainState .~ Right m
+        -- trace = Trace.liftWallet wallet1 (submitTxn $ Right txn)
+        trace' = void Trace.nextSlot
+        compoundStart = prerunEmulatorTrace conf trace'
+        -- compoundCont = continueEmulatorTrace compoundStart trace'
+        (lst1, _, _) = concludeEmulatorTrace compoundStart trace'
+        (lst2, _, _) = runEmulatorTrace conf $ trace' >> trace'
+    length lst1 === length lst2
 
 pubKeyTransactions :: EmulatorTrace ()
 pubKeyTransactions = do
