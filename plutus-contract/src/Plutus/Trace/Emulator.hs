@@ -214,15 +214,24 @@ interpretEmulatorTrace conf action =
     -- initial transaction gets validated before the wallets
     -- try to spend their funds
     let action' = Waiting.nextSlot >> action >> Waiting.nextSlot
-        wallets = fromMaybe (Wallet.toMockWallet <$> CW.knownWallets) (preview (initialChainState . _Left . to Map.keys) conf)
-    in
-    evalState @EmulatorThreads mempty
-        $ handleDeterministicIds
-        $ interpret (mapLog (review schedulerEvent))
-        $ runThreads
-        $ do
-            raise $ launchSystemThreads wallets
-            handleEmulatorTrace (_slotConfig conf) action'
+     in interpretEmulatorTrace' conf action'
+
+-- | Interpret a 'Trace Emulator' action in the multi agent and emulated
+--   blockchain effects, but without adding wait actions to the begining and end
+interpretEmulatorTrace' :: forall effs a.
+    ( Member MultiAgentEffect effs
+    , Member MultiAgentControlEffect effs
+    , Member (Error EmulatorRuntimeError) effs
+    , Member ChainControlEffect effs
+    , Member (LogMsg EmulatorEvent') effs
+    , Member (State EmulatorState) effs
+    )
+    => EmulatorConfig
+    -> EmulatorTrace a
+    -> Eff effs ()
+interpretEmulatorTrace' conf action =
+    let wallets = fromMaybe (Wallet.toMockWallet <$> CW.knownWallets) (preview (initialChainState . _Left . to Map.keys) conf)
+    in  evalEmulatorTrace wallets (_slotConfig conf) action
 
 -- | Options for how to set up and print the trace.
 data TraceConfig = TraceConfig
@@ -352,7 +361,8 @@ prerunEmulatorTrace conf trace = case go of
     go = run .
          runReader ((initialDist . _initialChainState) conf) .
          foldEmulatorStreamM (generalize list) .
-         runEmulatorStream conf $ trace
+         runTraceStream conf .
+         interpretEmulatorTrace' conf $ Waiting.nextSlot >> trace
 
 -- | Given a snapshot and a \'continued\' trace, \'add on\' more computation,
 -- then \'freeze\' again.
@@ -385,8 +395,9 @@ concludeEmulatorTrace ::
   EmulatorTrace () ->
   ([EmulatorEvent], Maybe EmulatorErr, EmulatorState)
 concludeEmulatorTrace snapshot trace =
-  case continueEmulatorTrace snapshot trace of
-    EmulatorSnapshot logs mErr s _ _ -> (GHC.toList logs, mErr, s)
+  let trace' = trace >> void Waiting.nextSlot
+   in case continueEmulatorTrace snapshot trace' of
+        EmulatorSnapshot logs mErr s _ _ -> (GHC.toList logs, mErr, s)
 
 runEmulatorStream' ::
   EmulatorState ->
@@ -395,29 +406,9 @@ runEmulatorStream' ::
   EmulatorTrace () ->
   Stream (Of (LogMessage EmulatorEvent)) (Eff '[Reader (Map Wallet Value)]) (Maybe EmulatorErr, EmulatorState)
 runEmulatorStream' s slotConf feeConf =
-  runTraceStream' s slotConf feeConf . interpretEmulatorTrace' s slotConf
-
-interpretEmulatorTrace' :: forall (effs :: [Type -> Type]) (a :: Type) .
-  (Member MultiAgentEffect effs,
-   Member MultiAgentControlEffect effs,
-   Member (Error EmulatorRuntimeError) effs,
-   Member ChainControlEffect effs,
-   Member (LogMsg EmulatorEvent') effs,
-   Member (State EmulatorState) effs
-   ) =>
-   EmulatorState ->
-   SlotConfig ->
-   EmulatorTrace a ->
-   Eff effs ()
-interpretEmulatorTrace' s slotConf action =
-  let action' = Waiting.nextSlot >> action >> Waiting.nextSlot
-      wallets = Map.keys . _walletStates $ s
-   in evalState @EmulatorThreads mempty .
-        handleDeterministicIds .
-        interpret (mapLog (review schedulerEvent)) .
-        runThreads $ do
-          raise . launchSystemThreads $ wallets
-          handleEmulatorTrace slotConf action'
+  let wallets = Map.keys . _walletStates $ s
+   in runTraceStream' s slotConf feeConf .
+        evalEmulatorTrace wallets slotConf
 
 runTraceStream' :: forall (effs :: [Type -> Type]) .
     EmulatorState ->
@@ -448,3 +439,24 @@ runTraceStream' s slotConf feeConf =
     . subsume
     . subsume @(State EmulatorState)
     . raiseEnd
+
+evalEmulatorTrace ::
+  forall (effs :: [Type -> Type]) (a :: Type) .
+  (Member MultiAgentEffect effs,
+   Member MultiAgentControlEffect effs,
+   Member (Error EmulatorRuntimeError) effs,
+   Member ChainControlEffect effs,
+   Member (LogMsg EmulatorEvent') effs,
+   Member (State EmulatorState) effs
+   ) =>
+   [Wallet] ->
+   SlotConfig ->
+   EmulatorTrace a ->
+   Eff effs ()
+evalEmulatorTrace wallets slotConf action =
+  evalState @EmulatorThreads mempty .
+    handleDeterministicIds .
+    interpret (mapLog (review schedulerEvent)) .
+    runThreads $ do
+      raise . launchSystemThreads $ wallets
+      handleEmulatorTrace slotConf action
