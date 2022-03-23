@@ -73,7 +73,7 @@ import Ledger.Address (PaymentPubKey (PaymentPubKey), PaymentPubKeyHash (Payment
 import Ledger.Address qualified as Address
 import Ledger.Constraints.TxConstraints (ScriptInputConstraint (ScriptInputConstraint, icRedeemer, icTxOutRef),
                                          ScriptOutputConstraint (ScriptOutputConstraint, ocDatum, ocValue),
-                                         TxConstraint (MustBeSignedBy, MustHashDatum, MustIncludeDatum, MustMintValue, MustPayToOtherScript, MustPayToPubKeyAddress, MustProduceAtLeast, MustSatisfyAnyOf, MustSpendAtLeast, MustSpendPubKeyOutput, MustSpendScriptOutput, MustValidateIn),
+                                         TxConstraint (MustBeSignedBy, MustHashDatum, MustIncludeDatum, MustIncludeMetadata, MustMintValue, MustPayToOtherScript, MustPayToPubKeyAddress, MustProduceAtLeast, MustSatisfyAnyOf, MustSpendAtLeast, MustSpendPubKeyOutput, MustSpendScriptOutput, MustValidateIn),
                                          TxConstraints (TxConstraints, txConstraints, txOwnInputs, txOwnOutputs))
 import Ledger.Crypto (pubKeyHash)
 import Ledger.Orphans ()
@@ -585,6 +585,8 @@ processConstraint = \case
     MustIncludeDatum dv ->
         let theHash = datumHash dv in
         unbalancedTx . tx . Tx.datumWitnesses . at theHash .= Just dv
+    MustIncludeMetadata meta -> do
+        unbalancedTx . tx . Tx.metadata .= Just meta
     MustValidateIn timeRange ->
         unbalancedTx . validityTimeRange %= (timeRange /\)
     MustBeSignedBy pk -> do

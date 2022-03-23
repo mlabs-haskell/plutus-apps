@@ -17,7 +17,9 @@
 module Ledger.Constraints.TxConstraints where
 
 import Data.Aeson (FromJSON, ToJSON)
+import Data.Aeson qualified as Aeson
 import Data.Bifunctor (Bifunctor (bimap))
+import Data.ByteString.Lazy (toStrict)
 import Data.Map qualified as Map
 import GHC.Generics (Generic)
 import Prettyprinter (Pretty (pretty, prettyList), hang, viaShow, vsep, (<+>))
@@ -29,12 +31,14 @@ import PlutusTx.Prelude (Bool (False, True), Foldable (foldMap), Functor (fmap),
                          not, null, ($), (.), (>>=), (||))
 
 import Ledger.Address (PaymentPubKeyHash, StakePubKeyHash)
+import Ledger.Constraints.Metadata (TxMetadata)
 import Plutus.V1.Ledger.Interval qualified as I
 import Plutus.V1.Ledger.Scripts (Datum (Datum), DatumHash, MintingPolicyHash, Redeemer, ValidatorHash, unitRedeemer)
 import Plutus.V1.Ledger.Time (POSIXTimeRange)
 import Plutus.V1.Ledger.Tx (TxOutRef)
 import Plutus.V1.Ledger.Value (TokenName, Value, isZero)
 import Plutus.V1.Ledger.Value qualified as Value
+import PlutusTx.Builtins.Internal (BuiltinByteString (BuiltinByteString))
 
 import Prelude qualified as Haskell
 
@@ -67,6 +71,7 @@ data TxConstraint =
     | MustPayToOtherScript ValidatorHash Datum Value
     -- ^ The transaction must create a transaction output with a script address.
     | MustSatisfyAnyOf [[TxConstraint]]
+    | MustIncludeMetadata BuiltinByteString
     deriving stock (Haskell.Show, Generic, Haskell.Eq)
     deriving anyclass (ToJSON, FromJSON)
 
@@ -96,6 +101,8 @@ instance Pretty TxConstraint where
             hang 2 $ vsep ["must hash datum:", pretty dvh, pretty dv]
         MustSatisfyAnyOf xs ->
             hang 2 $ vsep ["must satisfy any of:", prettyList xs]
+        MustIncludeMetadata meta ->
+            hang 2 $ vsep ["must include metadata:", viaShow meta]
 
 -- Constraint which specifies that the transaction must spend a transaction
 -- output from a target script.
@@ -439,6 +446,11 @@ mustSpendScriptOutput txOutref = singleton . MustSpendScriptOutput txOutref
 {-# INLINABLE mustSatisfyAnyOf #-}
 mustSatisfyAnyOf :: forall i o. [TxConstraints i o] -> TxConstraints i o
 mustSatisfyAnyOf = singleton . MustSatisfyAnyOf . map txConstraints
+
+{-# INLINABLE mustIncludeMetadata #-}
+-- | Requirement to attach metadata to transaction
+mustIncludeMetadata :: forall i o. TxMetadata -> TxConstraints i o
+mustIncludeMetadata = singleton . MustIncludeMetadata . BuiltinByteString . toStrict . Aeson.encode
 
 {-# INLINABLE isSatisfiable #-}
 -- | Are the constraints satisfiable?

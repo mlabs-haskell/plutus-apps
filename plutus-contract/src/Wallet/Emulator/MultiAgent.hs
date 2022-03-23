@@ -300,6 +300,7 @@ emulatorStateInitialDist mp = emulatorStatePool [EmulatorTx tx] where
             , txSignatures = mempty
             , txRedeemers = mempty
             , txData = mempty
+            , txMetadata = Nothing
             }
     -- See [Creating wallets with multiple outputs]
     mkOutputs (key, vl) = mkOutput key <$> splitHeadinto10 (Wallet.splitOffAdaOnlyValue vl)

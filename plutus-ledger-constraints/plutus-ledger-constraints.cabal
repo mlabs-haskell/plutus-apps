@@ -40,10 +40,14 @@ library
         Ledger.Constraints.OffChain
         Ledger.Constraints.OnChain
         Ledger.Constraints.TxConstraints
+        Ledger.Constraints.Metadata
 
     build-depends:
         base >=4.9 && <5,
+        base16-bytestring >= 1,
+        bytestring -any,
         aeson -any,
+        cardano-prelude -any,
         containers -any,
         lens -any,
         mtl -any,
@@ -52,6 +56,7 @@ library
         plutus-ledger -any,
         plutus-ledger-api -any,
         plutus-tx -any,
+        text -any,
         transformers -any,
 
 test-suite plutus-ledger-constraints-test
