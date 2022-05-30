@@ -73,13 +73,11 @@ import Control.Monad.Freer.Extras qualified as Eff
 import Control.Monad.Freer.Extras.Log (LogMsg, mapLog)
 import Control.Monad.Freer.State (State)
 
-import Ledger (addSignature)
+import Ledger (Params, addSignature)
 import Plutus.ChainIndex (ChainIndexError)
 import Wallet.API (WalletAPIError)
 
 import Ledger.CardanoWallet qualified
-import Ledger.Fee (FeeConfig)
-import Ledger.TimeSlot (SlotConfig)
 import Plutus.Contract.Error (AssertionError)
 import Plutus.Contract.Error qualified
 import Wallet.Emulator.Chain (ChainControlEffect, ChainEffect, ChainEvent, ChainState, handleChain, handleControlChain)
@@ -99,17 +97,16 @@ processEmulated :: forall effs.
     , Member (State EmulatorState) effs
     , Member (LogMsg EmulatorEvent') effs
     )
-    => SlotConfig
-    -> FeeConfig
+    => Params
     -> Eff (MultiAgentEffect ': MultiAgentControlEffect ': ChainEffect ': ChainControlEffect ': effs)
     ~> Eff effs
-processEmulated slotCfg feeCfg act =
+processEmulated params act =
     act
-        & handleMultiAgent feeCfg
+        & handleMultiAgent
         & handleMultiAgentControl
-        & reinterpret2 @ChainEffect @(State ChainState) @(LogMsg ChainEvent) (handleChain slotCfg)
+        & reinterpret2 @ChainEffect @(State ChainState) @(LogMsg ChainEvent) (handleChain params)
         & interpret (Eff.handleZoomedState chainState)
         & interpret (mapLog (review chainEvent))
-        & reinterpret2 @ChainControlEffect @(State ChainState) @(LogMsg ChainEvent) (handleControlChain slotCfg)
+        & reinterpret2 @ChainControlEffect @(State ChainState) @(LogMsg ChainEvent) (handleControlChain params)
         & interpret (Eff.handleZoomedState chainState)
         & interpret (mapLog (review chainEvent))

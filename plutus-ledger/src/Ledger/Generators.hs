@@ -4,9 +4,9 @@
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE RecordWildCards     #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TemplateHaskell     #-}
 {-# LANGUAGE TypeApplications    #-}
 {-# LANGUAGE TypeFamilies        #-}
+
 -- | Generators for constructing blockchains and transactions for use in property-based testing.
 module Ledger.Generators(
     -- * Mockchain
@@ -71,14 +71,14 @@ import Gen.Cardano.Api.Typed qualified as Gen
 import Hedgehog
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
-import Ledger (Ada, CurrencySymbol, Interval, MintingPolicy, OnChainTx (Valid), POSIXTime (POSIXTime, getPOSIXTime),
-               POSIXTimeRange, Passphrase (Passphrase), PaymentPrivateKey (unPaymentPrivateKey),
-               PaymentPubKey (PaymentPubKey), RedeemerPtr (RedeemerPtr), ScriptContext (ScriptContext),
-               ScriptTag (Mint), Slot (Slot), SlotRange, SomeCardanoApiTx (SomeTx), TokenName,
+import Ledger (Ada, CurrencySymbol, Interval, OnChainTx (Valid), POSIXTime (POSIXTime, getPOSIXTime), POSIXTimeRange,
+               Passphrase (Passphrase), PaymentPrivateKey (unPaymentPrivateKey), PaymentPubKey (PaymentPubKey),
+               RedeemerPtr (RedeemerPtr), ScriptContext (ScriptContext), ScriptTag (Mint), Slot (Slot), SlotRange,
+               SomeCardanoApiTx (SomeTx), TokenName,
                Tx (txFee, txInputs, txMint, txMintScripts, txOutputs, txRedeemers, txValidRange), TxIn,
                TxInInfo (txInInfoOutRef), TxInfo (TxInfo), TxOut (txOutValue), TxOutRef (TxOutRef),
-               UtxoIndex (UtxoIndex), ValidationCtx (ValidationCtx), Value, _runValidation, addSignature',
-               mkMintingPolicyScript, pubKeyTxIn, pubKeyTxOut, scriptCurrencySymbol, toPublicKey, txId)
+               UtxoIndex (UtxoIndex), ValidationCtx (ValidationCtx), Value, _runValidation, addSignature', pubKeyTxIn,
+               pubKeyTxOut, toPublicKey, txId)
 import Ledger qualified
 import Ledger.CardanoWallet qualified as CW
 import Ledger.Fee (FeeConfig (fcScriptsFeeFactor), calcFees)
@@ -86,11 +86,11 @@ import Ledger.Index qualified as Index
 import Ledger.TimeSlot (SlotConfig)
 import Ledger.TimeSlot qualified as TimeSlot
 import Ledger.Value qualified as Value
+import Plutus.Script.Utils.V1.Generators as ScriptGen
 import Plutus.V1.Ledger.Ada qualified as Ada
 import Plutus.V1.Ledger.Contexts qualified as Contexts
 import Plutus.V1.Ledger.Interval qualified as Interval
 import Plutus.V1.Ledger.Scripts qualified as Script
-import PlutusTx qualified
 
 -- | Attach signatures of all known private keys to a transaction.
 signAll :: Tx -> Tx
@@ -215,7 +215,7 @@ genValidTransactionSpending' g feeCfg ins totalVal = do
     mintTokenName <- genTokenName
     let mintValue = if mintAmount == 0
                        then Nothing
-                       else Just $ Value.singleton (scriptCurrencySymbol alwaysSucceedPolicy) mintTokenName mintAmount
+                       else Just $ ScriptGen.someTokenValue mintTokenName mintAmount
         fee' = calcFees feeCfg 0
         numOut = Set.size (gmPubKeys g) - 1
         totalValAda = Ada.fromValue totalVal
@@ -238,7 +238,7 @@ genValidTransactionSpending' g feeCfg ins totalVal = do
                         { txInputs = ins
                         , txOutputs = fmap (\f -> f Nothing) $ uncurry pubKeyTxOut <$> zip outVals (Set.toList $ gmPubKeys g)
                         , txMint = maybe mempty id mintValue
-                        , txMintScripts = Set.singleton alwaysSucceedPolicy
+                        , txMintScripts = Set.singleton ScriptGen.alwaysSucceedPolicy
                         , txRedeemers = Map.singleton (RedeemerPtr Mint 0) Script.unitRedeemer
                         , txFee = Ada.toValue fee'
                         }
@@ -247,9 +247,6 @@ genValidTransactionSpending' g feeCfg ins totalVal = do
                 -- this is somewhat crude (but technically valid)
             pure (signAll tx)
         else Gen.discard
-
-alwaysSucceedPolicy :: MintingPolicy
-alwaysSucceedPolicy = mkMintingPolicyScript $$(PlutusTx.compile [|| \_ _ -> () ||])
 
 -- | Generate an 'Interval where the lower bound if less or equal than the
 -- upper bound.

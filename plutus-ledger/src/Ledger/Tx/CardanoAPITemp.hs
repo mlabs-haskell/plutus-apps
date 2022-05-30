@@ -10,6 +10,7 @@ module Ledger.Tx.CardanoAPITemp (makeTransactionBody') where
 
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
+import Data.Maybe qualified as Maybe
 import Data.Sequence.Strict qualified as Seq
 import Data.Set qualified as Set
 
@@ -22,6 +23,8 @@ import Ouroboros.Consensus.Shelley.Eras (StandardAlonzo)
 import Cardano.Ledger.Core qualified as Ledger
 
 import Cardano.Ledger.Alonzo.Data qualified as Alonzo
+import Cardano.Ledger.Alonzo.Language qualified as Alonzo
+import Cardano.Ledger.Alonzo.Scripts qualified as Alonzo
 import Cardano.Ledger.Alonzo.Tx qualified as Alonzo
 import Cardano.Ledger.Alonzo.TxBody qualified as Alonzo
 import Cardano.Ledger.Alonzo.TxWitness qualified as Alonzo
@@ -32,8 +35,12 @@ import Cardano.Ledger.Keys qualified as Shelley
 import Cardano.Ledger.Shelley.Tx qualified as Shelley
 import Cardano.Ledger.Shelley.TxBody qualified as Shelley
 
-makeTransactionBody' :: TxBodyContent BuildTx AlonzoEra -> Either TxBodyError (TxBody AlonzoEra)
 makeTransactionBody'
+    :: Map.Map Alonzo.RdmrPtr Alonzo.ExUnits
+    -> TxBodyContent BuildTx AlonzoEra
+    -> Either TxBodyError (TxBody AlonzoEra)
+makeTransactionBody'
+    exUnits
     txbodycontent@TxBodyContent {
         txIns,
         txInsCollateral,
@@ -44,7 +51,8 @@ makeTransactionBody'
         txWithdrawals,
         txCertificates,
         txMintValue,
-        txScriptValidity
+        txScriptValidity,
+        txProtocolParams
     } =
     return $
       ShelleyTxBody ShelleyBasedEraAlonzo
@@ -80,7 +88,14 @@ makeTransactionBody'
           (case txMintValue of
              TxMintNone        -> mempty
              TxMintValue _ v _ -> toMaryValue v)
-          SNothing -- ignoring txProtocolParams in CardanoAPITemp
+          (case txProtocolParams of
+             BuildTxWith Nothing        -> SNothing
+             BuildTxWith (Just pparams) ->
+               Alonzo.hashScriptIntegrity
+                 (toLedgerPParams ShelleyBasedEraAlonzo pparams)
+                 languages
+                 redeemers
+                 datums)
           SNothing -- ignoring txMetadata and txAuxScripts in CardanoAPITemp
           SNothing) -- TODO alonzo: support optional network id in TxBodyContent
         scripts
@@ -119,10 +134,17 @@ makeTransactionBody'
     redeemers =
       Alonzo.Redeemers $
         Map.fromList
-          [ (toAlonzoRdmrPtr idx, (toAlonzoData d, toAlonzoExUnits e))
+          [ let ptr = toAlonzoRdmrPtr idx in (ptr, (toAlonzoData d, Maybe.fromMaybe (toAlonzoExUnits e) $ Map.lookup ptr exUnits))
           | (idx, AnyScriptWitness
                     (PlutusScriptWitness _ _ _ _ d e)) <- witnesses
           ]
+
+    languages :: Set.Set Alonzo.Language
+    languages =
+      Set.fromList
+        [ toAlonzoLanguage (AnyPlutusScriptVersion v)
+        | (_, AnyScriptWitness (PlutusScriptWitness _ v _ _ _ _)) <- witnesses
+        ]
 
 toShelleyWithdrawal :: [(StakeAddress, Lovelace, a)] -> Shelley.Wdrl StandardCrypto
 toShelleyWithdrawal withdrawals =
@@ -155,3 +177,7 @@ toAlonzoTxOutDataHash :: TxOutDatum CtxTx era
 toAlonzoTxOutDataHash TxOutDatumNone                         = SNothing
 toAlonzoTxOutDataHash (TxOutDatumHash _ (ScriptDataHash dh)) = SJust dh
 toAlonzoTxOutDataHash (TxOutDatum _ d)                       = let ScriptDataHash dh = hashScriptData d in SJust dh
+
+toAlonzoLanguage :: AnyPlutusScriptVersion -> Alonzo.Language
+toAlonzoLanguage (AnyPlutusScriptVersion PlutusScriptV1) = Alonzo.PlutusV1
+toAlonzoLanguage (AnyPlutusScriptVersion PlutusScriptV2) = Alonzo.PlutusV2

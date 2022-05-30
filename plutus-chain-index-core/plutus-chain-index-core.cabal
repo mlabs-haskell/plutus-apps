@@ -58,6 +58,7 @@ library
     build-depends:
         plutus-ledger -any,
         plutus-ledger-api -any,
+        plutus-script-utils -any,
         plutus-tx -any,
         freer-extras -any,
     build-depends:
@@ -96,6 +97,7 @@ library
         unordered-containers -any,
         bytestring -any,
         text -any,
+        resource-pool -any,
         servant -any,
         servant-openapi3 -any,
         servant-server -any,
@@ -137,7 +139,9 @@ test-suite plutus-chain-index-test
         freer-simple -any,
         hedgehog -any,
         lens -any,
+        resource-pool -any,
         serialise -any,
+        stm -any,
         sqlite-simple -any,
         tasty -any,
         tasty-hedgehog -any,

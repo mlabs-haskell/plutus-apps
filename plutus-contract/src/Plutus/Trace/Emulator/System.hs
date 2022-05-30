@@ -28,7 +28,7 @@ import Wallet.Emulator.MultiAgent (MultiAgentControlEffect, MultiAgentEffect, wa
 
 import Data.String (IsString (..))
 import Ledger (Block, Slot)
-import Plutus.ChainIndex (ChainIndexControlEffect, ChainSyncBlock (Block), Tip (Tip, TipAtGenesis), appendBlock,
+import Plutus.ChainIndex (ChainIndexControlEffect, ChainSyncBlock (Block), Tip (Tip, TipAtGenesis), appendBlocks,
                           blockId, fromOnChainTx, getTip)
 import Plutus.Trace.Emulator.Types (EmulatorMessage (..))
 import Plutus.Trace.Scheduler (EmSystemCall, MessageCall (..), Priority (..), Tag, fork, mkSysCall, sleep)
@@ -83,7 +83,7 @@ launchSystemThreads wallets = do
 
 -- | Tag for an agent thread. See note [Thread Tag]
 agentTag :: Wallet -> Tag
-agentTag (Wallet i) = fromString ("W " <> show i)
+agentTag (Wallet _ i) = fromString ("W " <> show i)
 
 -- | Tag for the block maker thread. See note [Thread Tag]
 blockMakerTag :: Tag
@@ -140,4 +140,4 @@ appendNewTipBlock lastTip block newSlot = do
   let nextBlockNo = case lastTip of TipAtGenesis -> 0
                                     Tip _ _ n    -> n + 1
       newTip = Tip newSlot (blockId block) nextBlockNo
-  appendBlock (Block newTip (fmap (\tx -> (fromOnChainTx tx, def)) block))
+  appendBlocks [(Block newTip (fmap (\tx -> (fromOnChainTx tx, def)) block))]

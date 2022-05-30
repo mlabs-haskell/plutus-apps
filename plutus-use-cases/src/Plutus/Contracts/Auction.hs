@@ -11,6 +11,7 @@
 {-# LANGUAGE TemplateHaskell    #-}
 {-# LANGUAGE TypeApplications   #-}
 {-# LANGUAGE TypeOperators      #-}
+{-# OPTIONS_GHC -g -fplugin-opt PlutusTx.Plugin:coverage-all #-}
 module Plutus.Contracts.Auction(
     AuctionState(..),
     AuctionInput(..),
@@ -23,7 +24,8 @@ module Plutus.Contracts.Auction(
     AuctionOutput(..),
     AuctionError(..),
     ThreadToken,
-    SM.getThreadToken
+    SM.getThreadToken,
+    covIdx
     ) where
 
 import Control.Lens (makeClassyPrisms)
@@ -45,6 +47,8 @@ import Plutus.Contract.StateMachine (State (..), StateMachine (..), StateMachine
 import Plutus.Contract.StateMachine qualified as SM
 import Plutus.Contract.Util (loopM)
 import PlutusTx qualified
+import PlutusTx.Code
+import PlutusTx.Coverage
 import PlutusTx.Prelude
 import Prelude qualified as Haskell
 
@@ -170,7 +174,7 @@ typedValidator = Scripts.mkTypedValidatorParam @AuctionMachine
     $$(PlutusTx.compile [|| mkValidator ||])
     $$(PlutusTx.compile [|| wrap ||])
     where
-        wrap = Scripts.wrapValidator
+        wrap = Scripts.mkUntypedValidator
 
 -- | The machine client of the auction state machine. It contains the script instance
 --   with the on-chain code, and the Haskell definition of the state machine for
@@ -358,6 +362,10 @@ auctionBuyer currency params = do
 
         -- If the state can't be found we wait for it to appear.
         Nothing -> SM.waitForUpdateUntilTime client (apEndTime params) >>= \case
-            Transition _ _ (Ongoing s) -> loop s
-            InitialState _ (Ongoing s) -> loop s
-            _                          -> logWarn CurrentStateNotFound
+            Transition _ (Ongoing s) -> loop s
+            InitialState (Ongoing s) -> loop s
+            _                        -> logWarn CurrentStateNotFound
+
+covIdx :: CoverageIndex
+covIdx = getCovIdx $$(PlutusTx.compile [|| mkValidator ||])
+

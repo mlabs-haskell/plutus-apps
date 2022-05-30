@@ -19,9 +19,9 @@ import Data.Show.Generic (genericShow)
 import Data.Tuple.Nested ((/\))
 import Ledger.Constraints.OffChain (UnbalancedTx)
 import Ledger.Index (ScriptValidationEvent, ValidationError, ValidationPhase)
+import Ledger.Tx (CardanoTx)
 import Plutus.V1.Ledger.Address (Address)
 import Plutus.V1.Ledger.Slot (Slot)
-import Plutus.V1.Ledger.Tx (Tx)
 import Plutus.V1.Ledger.TxId (TxId)
 import Plutus.V1.Ledger.Value (Value)
 import Type.Proxy (Proxy(Proxy))
@@ -90,9 +90,10 @@ data TxBalanceMsg
   | AddingInputsFor Value
   | NoCollateralInputsAdded
   | AddingCollateralInputsFor Value
-  | FinishedBalancing Tx
-  | SubmittingTx Tx
-  | ValidationFailed ValidationPhase TxId Tx ValidationError (Array ScriptValidationEvent)
+  | FinishedBalancing CardanoTx
+  | SigningTx CardanoTx
+  | SubmittingTx CardanoTx
+  | ValidationFailed ValidationPhase TxId CardanoTx ValidationError (Array ScriptValidationEvent) Value
 
 instance Show TxBalanceMsg where
   show a = genericShow a
@@ -107,8 +108,9 @@ instance EncodeJson TxBalanceMsg where
     NoCollateralInputsAdded -> encodeJson { tag: "NoCollateralInputsAdded", contents: jsonNull }
     AddingCollateralInputsFor a -> E.encodeTagged "AddingCollateralInputsFor" a E.value
     FinishedBalancing a -> E.encodeTagged "FinishedBalancing" a E.value
+    SigningTx a -> E.encodeTagged "SigningTx" a E.value
     SubmittingTx a -> E.encodeTagged "SubmittingTx" a E.value
-    ValidationFailed a b c d e -> E.encodeTagged "ValidationFailed" (a /\ b /\ c /\ d /\ e) (E.tuple (E.value >/\< E.value >/\< E.value >/\< E.value >/\< E.value))
+    ValidationFailed a b c d e f -> E.encodeTagged "ValidationFailed" (a /\ b /\ c /\ d /\ e /\ f) (E.tuple (E.value >/\< E.value >/\< E.value >/\< E.value >/\< E.value >/\< E.value))
 
 instance DecodeJson TxBalanceMsg where
   decodeJson = defer \_ -> D.decode
@@ -122,8 +124,9 @@ instance DecodeJson TxBalanceMsg where
         , "NoCollateralInputsAdded" /\ pure NoCollateralInputsAdded
         , "AddingCollateralInputsFor" /\ D.content (AddingCollateralInputsFor <$> D.value)
         , "FinishedBalancing" /\ D.content (FinishedBalancing <$> D.value)
+        , "SigningTx" /\ D.content (SigningTx <$> D.value)
         , "SubmittingTx" /\ D.content (SubmittingTx <$> D.value)
-        , "ValidationFailed" /\ D.content (D.tuple $ ValidationFailed </$\> D.value </*\> D.value </*\> D.value </*\> D.value </*\> D.value)
+        , "ValidationFailed" /\ D.content (D.tuple $ ValidationFailed </$\> D.value </*\> D.value </*\> D.value </*\> D.value </*\> D.value </*\> D.value)
         ]
 
 derive instance Generic TxBalanceMsg _
@@ -165,17 +168,22 @@ _AddingCollateralInputsFor = prism' AddingCollateralInputsFor case _ of
   (AddingCollateralInputsFor a) -> Just a
   _ -> Nothing
 
-_FinishedBalancing :: Prism' TxBalanceMsg Tx
+_FinishedBalancing :: Prism' TxBalanceMsg CardanoTx
 _FinishedBalancing = prism' FinishedBalancing case _ of
   (FinishedBalancing a) -> Just a
   _ -> Nothing
 
-_SubmittingTx :: Prism' TxBalanceMsg Tx
+_SigningTx :: Prism' TxBalanceMsg CardanoTx
+_SigningTx = prism' SigningTx case _ of
+  (SigningTx a) -> Just a
+  _ -> Nothing
+
+_SubmittingTx :: Prism' TxBalanceMsg CardanoTx
 _SubmittingTx = prism' SubmittingTx case _ of
   (SubmittingTx a) -> Just a
   _ -> Nothing
 
-_ValidationFailed :: Prism' TxBalanceMsg { a :: ValidationPhase, b :: TxId, c :: Tx, d :: ValidationError, e :: Array ScriptValidationEvent }
-_ValidationFailed = prism' (\{ a, b, c, d, e } -> (ValidationFailed a b c d e)) case _ of
-  (ValidationFailed a b c d e) -> Just { a, b, c, d, e }
+_ValidationFailed :: Prism' TxBalanceMsg { a :: ValidationPhase, b :: TxId, c :: CardanoTx, d :: ValidationError, e :: Array ScriptValidationEvent, f :: Value }
+_ValidationFailed = prism' (\{ a, b, c, d, e, f } -> (ValidationFailed a b c d e f)) case _ of
+  (ValidationFailed a b c d e f) -> Just { a, b, c, d, e, f }
   _ -> Nothing

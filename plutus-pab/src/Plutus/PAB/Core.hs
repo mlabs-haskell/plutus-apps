@@ -39,7 +39,7 @@ module Plutus.PAB.Core
     , EffectHandlers(..)
     , runPAB
     , runPAB'
-    , PABEnvironment(appEnv)
+    , PABEnvironment(..)
     -- * Contracts and instances
     , reportContractState
     , activateContract
@@ -67,7 +67,6 @@ module Plutus.PAB.Core
     , activeContracts
     , finalResult
     , waitUntilFinished
-    , blockchainEnv
     , valueAt
     , askUserEnv
     , askBlockchainEnv
@@ -584,7 +583,7 @@ valueAt :: Wallet -> PABAction t env Value
 valueAt wallet = do
   handleAgentThread wallet Nothing $ do
     utxoRefs <- getAllUtxoRefs def
-    txOutsM <- traverse ChainIndex.txOutFromRef utxoRefs
+    txOutsM <- traverse ChainIndex.unspentTxOutFromRef utxoRefs
     pure $ foldMap (view ciTxOutValue) $ catMaybes txOutsM
   where
     cred = addressCredential $ mockWalletAddress wallet

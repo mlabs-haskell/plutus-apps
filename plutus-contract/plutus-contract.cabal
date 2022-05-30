@@ -7,10 +7,10 @@ license-files:
   NOTICE
 maintainer: jann.mueller@iohk.io
 author: Jann Müller
-homepage: https://github.com/iohk/plutus#readme
-bug-reports: https://github.com/iohk/plutus/issues
+homepage: https://github.com/input-output-hk/plutus-apps#readme
+bug-reports: https://github.com/input-output-hk/plutus-apps/issues
 description:
-    Please see the README on GitHub at <https://github.com/input-output-hk/plutus#readme>
+    Please see the README on GitHub at <https://github.com/input-output-hk/plutus-apps#readme>
 build-type: Simple
 
 source-repository head
@@ -106,6 +106,7 @@ library
         plutus-ledger -any,
         plutus-ledger-api -any,
         plutus-ledger-constraints -any,
+        plutus-script-utils -any,
         plutus-tx -any,
         freer-extras -any
     build-depends:
@@ -127,6 +128,7 @@ library
         freer-simple -any,
         hashable -any,
         hedgehog -any,
+        html-entities -any,
         lens -any,
         memory -any,
         mmorph -any,
@@ -149,6 +151,7 @@ library
         openapi3 -any,
         cardano-wallet-core -any,
         text-class -any,
+        uniplate -any
 
     if !(impl(ghcjs) || os(ghcjs))
         build-depends: plutus-tx-plugin -any
@@ -160,6 +163,7 @@ library
         exposed-modules:
             Plutus.Contract.Test
             Plutus.Contract.Test.Coverage
+            Plutus.Contract.Test.Coverage.ReportCoverage
             Plutus.Contract.Test.ContractModel
             Plutus.Contract.Test.ContractModel.Internal
             Plutus.Contract.Test.ContractModel.Symbolics
@@ -190,39 +194,41 @@ test-suite plutus-contract-test
         Spec.Rows
         Spec.State
         Spec.ThreadToken
+        Spec.TimeValidity
         Spec.Secrets
         Spec.Plutus.Contract.Wallet
         Spec.Plutus.Contract.Oracle
     build-depends:
+        aeson -any,
         base >=4.9 && <5,
         bytestring -any,
         cardano-api -any,
         cardano-api:gen -any,
         containers -any,
         data-default -any,
+        extensible-effects -any,
         freer-extras -any,
+        freer-simple -any,
         hedgehog -any,
-        tasty -any,
-        tasty-golden -any,
-        tasty-hunit -any,
-        tasty-quickcheck -any,
-        tasty-hedgehog -any,
-        text -any,
-        mtl -any,
-        aeson -any,
         lens -any,
-        transformers -any,
+        mtl -any,
         plutus-chain-index-core -any,
         plutus-contract -any,
         plutus-ledger -any,
-        plutus-ledger-constraints -any,
-        plutus-tx -any,
         plutus-ledger-api -any,
-        freer-simple -any,
-        aeson -any,
-        semigroupoids -any,
+        plutus-ledger-constraints -any,
+        plutus-script-utils -any,
+        plutus-tx -any,
+        QuickCheck -any,
         row-types -any,
-        QuickCheck -any
+        semigroupoids -any,
+        tasty -any,
+        tasty-golden -any,
+        tasty-hedgehog -any,
+        tasty-hunit -any,
+        tasty-quickcheck -any,
+        text -any,
+        transformers -any
 
     if !(impl(ghcjs) || os(ghcjs))
         build-depends: plutus-tx-plugin -any

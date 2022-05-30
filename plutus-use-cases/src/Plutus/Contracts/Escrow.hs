@@ -13,6 +13,7 @@
 {-# LANGUAGE TypeOperators        #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -fplugin-opt PlutusTx.Plugin:debug-context #-}
+{-# OPTIONS_GHC -g -fplugin-opt PlutusTx.Plugin:coverage-all #-}
 -- | A general-purpose escrow contract in Plutus
 module Plutus.Contracts.Escrow(
     -- $escrow
@@ -40,6 +41,8 @@ module Plutus.Contracts.Escrow(
     , EscrowSchema
     -- * Exposed for test endpoints
     , Action(..)
+    -- * Coverage
+    , covIdx
     ) where
 
 import Control.Lens (makeClassyPrisms, review, view)
@@ -48,23 +51,27 @@ import Control.Monad.Error.Lens (throwing)
 import Data.Aeson (FromJSON, ToJSON)
 import GHC.Generics (Generic)
 
-import Ledger (Datum (..), DatumHash, POSIXTime, PaymentPubKeyHash (unPaymentPubKeyHash), TxId, ValidatorHash,
-               getCardanoTxId, interval, scriptOutputsAt, txSignedBy, valuePaidTo)
+import Plutus.V1.Ledger.Api (ScriptContext (..), TxInfo (..))
+import PlutusTx qualified
+import PlutusTx.Code
+import PlutusTx.Coverage
+import PlutusTx.Prelude hiding (Applicative (..), Semigroup (..), check, foldMap)
+
+import Ledger (POSIXTime, PaymentPubKeyHash (unPaymentPubKeyHash), TxId, getCardanoTxId, interval, scriptOutputsAt,
+               txSignedBy, valuePaidTo)
 import Ledger qualified
 import Ledger.Constraints (TxConstraints)
 import Ledger.Constraints qualified as Constraints
-import Ledger.Contexts (ScriptContext (..), TxInfo (..))
 import Ledger.Interval (after, before, from)
 import Ledger.Interval qualified as Interval
 import Ledger.Tx qualified as Tx
 import Ledger.Typed.Scripts (TypedValidator)
 import Ledger.Typed.Scripts qualified as Scripts
 import Ledger.Value (Value, geq, lt)
-
 import Plutus.Contract
 import Plutus.Contract.Typed.Tx qualified as Typed
-import PlutusTx qualified
-import PlutusTx.Prelude hiding (Applicative (..), Semigroup (..), check, foldMap)
+import Plutus.Script.Utils.V1.Scripts (datumHash)
+import Plutus.V1.Ledger.Scripts (Datum (Datum), DatumHash, ValidatorHash)
 
 import Prelude (Semigroup (..), foldMap)
 import Prelude qualified as Haskell
@@ -205,11 +212,11 @@ validate EscrowParams{escrowDeadline, escrowTargets} contributor action ScriptCo
             && traceIfFalse "txSignedBy" (scriptContextTxInfo `txSignedBy` unPaymentPubKeyHash contributor)
 
 typedValidator :: EscrowParams Datum -> Scripts.TypedValidator Escrow
-typedValidator escrow = go (Haskell.fmap Ledger.datumHash escrow) where
+typedValidator escrow = go (Haskell.fmap datumHash escrow) where
     go = Scripts.mkTypedValidatorParam @Escrow
         $$(PlutusTx.compile [|| validate ||])
         $$(PlutusTx.compile [|| wrap ||])
-    wrap = Scripts.wrapValidator
+    wrap = Scripts.mkUntypedValidator
 
 escrowContract
     :: EscrowParams Datum
@@ -322,7 +329,7 @@ refund ::
 refund inst escrow = do
     pk <- ownPaymentPubKeyHash
     unspentOutputs <- utxosAt (Scripts.validatorAddress inst)
-    let flt _ ciTxOut = either id Ledger.datumHash (Tx._ciTxOutDatum ciTxOut) == Ledger.datumHash (Datum (PlutusTx.toBuiltinData pk))
+    let flt _ ciTxOut = either id datumHash (Tx._ciTxOutDatum ciTxOut) == datumHash (Datum (PlutusTx.toBuiltinData pk))
         tx' = Typed.collectFromScriptFilter flt unspentOutputs Refund
                 <> Constraints.mustValidateIn (from (Haskell.succ $ escrowDeadline escrow))
     if Constraints.modifiesUtxoSet tx'
@@ -356,3 +363,6 @@ payRedeemRefund params vl = do
     -- Pay the value 'vl' into the contract
     _ <- pay inst params vl
     go
+
+covIdx :: CoverageIndex
+covIdx = getCovIdx $$(PlutusTx.compile [|| validate ||])

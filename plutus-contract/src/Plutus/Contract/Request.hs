@@ -35,12 +35,13 @@ module Plutus.Contract.Request(
     , redeemerFromHash
     , txOutFromRef
     , txFromTxId
+    , unspentTxOutFromRef
     , utxoRefMembership
     , utxoRefsAt
     , utxoRefsWithCurrency
     , utxosAt
-    , utxosTxOutTxAt
     , utxosTxOutTxFromTx
+    , utxosTxOutTxAt
     , txsFromTxIds
     , txoRefsAt
     , txsAt
@@ -114,9 +115,8 @@ import Data.Void (Void)
 import GHC.Generics (Generic)
 import GHC.Natural (Natural)
 import GHC.TypeLits (Symbol, symbolVal)
-import Ledger (Address, AssetClass, Datum, DatumHash, DiffMilliSeconds, MintingPolicy, MintingPolicyHash, POSIXTime,
-               PaymentPubKeyHash, Redeemer, RedeemerHash, Slot, StakeValidator, StakeValidatorHash, TxId,
-               TxOutRef (txOutRefId), Validator, ValidatorHash, Value, addressCredential, fromMilliSeconds)
+import Ledger (AssetClass, DiffMilliSeconds, POSIXTime, PaymentPubKeyHash, Slot, TxId, TxOutRef, Value,
+               addressCredential, fromMilliSeconds, txOutRefId)
 import Ledger.Constraints (TxConstraints)
 import Ledger.Constraints.OffChain (ScriptLookups, UnbalancedTx)
 import Ledger.Constraints.OffChain qualified as Constraints
@@ -124,6 +124,8 @@ import Ledger.Tx (CardanoTx, ChainIndexTxOut, ciTxOutValue, getCardanoTxId)
 import Ledger.Typed.Scripts (Any, TypedValidator, ValidatorTypes (DatumType, RedeemerType))
 import Ledger.Value qualified as V
 import Plutus.Contract.Util (loopM)
+import Plutus.V1.Ledger.Api (Address, Datum, DatumHash, MintingPolicy, MintingPolicyHash, Redeemer, RedeemerHash,
+                             StakeValidator, StakeValidatorHash, Validator, ValidatorHash)
 import PlutusTx qualified
 
 import Plutus.Contract.Effects (ActiveEndpoint (ActiveEndpoint, aeDescription, aeMetadata),
@@ -136,7 +138,7 @@ import Wallet.Types (ContractInstanceId, EndpointDescription (EndpointDescriptio
                      EndpointValue (EndpointValue, unEndpointValue))
 
 import Plutus.ChainIndex (ChainIndexTx, Page (nextPageQuery, pageItems), PageQuery, txOutRefs)
-import Plutus.ChainIndex.Api (IsUtxoResponse, TxosResponse (paget), UtxosResponse (page))
+import Plutus.ChainIndex.Api (IsUtxoResponse, TxosResponse, UtxosResponse (page), paget)
 import Plutus.ChainIndex.Types (RollbackState (Unknown), Tip, TxOutStatus, TxStatus)
 import Plutus.Contract.Error (AsContractError (_ChainIndexContractError, _ConstraintResolutionContractError, _EndpointDecodeContractError, _ResumableContractError, _WalletContractError))
 import Plutus.Contract.Resumable (prompt)
@@ -328,6 +330,18 @@ txOutFromRef ref = do
     E.TxOutRefResponse r -> pure r
     r                    -> throwError $ review _ChainIndexContractError ("TxOutRefResponse", r)
 
+unspentTxOutFromRef ::
+    forall w s e.
+    ( AsContractError e
+    )
+    => TxOutRef
+    -> Contract w s e (Maybe ChainIndexTxOut)
+unspentTxOutFromRef ref = do
+  cir <- pabReq (ChainIndexQueryReq $ E.UnspentTxOutFromRef ref) E._ChainIndexQueryResp
+  case cir of
+    E.UnspentTxOutResponse r -> pure r
+    r                        -> throwError $ review _ChainIndexContractError ("UnspentTxOutResponse", r)
+
 txFromTxId ::
     forall w s e.
     ( AsContractError e
@@ -410,7 +424,7 @@ utxosAt addr = do
   where
     f acc page = do
       let utxoRefs = pageItems page
-      txOuts <- traverse txOutFromRef utxoRefs
+      txOuts <- traverse unspentTxOutFromRef utxoRefs
       let utxos = Map.fromList
                 $ mapMaybe (\(ref, txOut) -> fmap (ref,) txOut)
                 $ zip utxoRefs txOuts
@@ -431,7 +445,7 @@ utxosTxOutTxAt addr = do
        -> Contract w s e (Map TxId ChainIndexTx, Map TxOutRef (ChainIndexTxOut, ChainIndexTx))
     go acc [] = pure acc
     go (lookupTx, oldResult) (ref:refs) = do
-      outM <- txOutFromRef ref
+      outM <- unspentTxOutFromRef ref
       case outM of
         Just out -> do
           let txid = txOutRefId ref
@@ -455,6 +469,7 @@ utxosTxOutTxAt addr = do
                   go (lookupTx, oldResult) refs
         Nothing -> go (lookupTx, oldResult) refs
 
+
 -- | Get the unspent transaction outputs from a 'ChainIndexTx'.
 utxosTxOutTxFromTx ::
     AsContractError e
@@ -464,7 +479,7 @@ utxosTxOutTxFromTx tx =
   catMaybes <$> mapM mkOutRef (txOutRefs tx)
   where
     mkOutRef txOutRef = do
-      ciTxOutM <- txOutFromRef txOutRef
+      ciTxOutM <- unspentTxOutFromRef txOutRef
       pure $ ciTxOutM >>= \ciTxOut -> pure (txOutRef, (ciTxOut, tx))
 
 foldTxoRefsAt ::

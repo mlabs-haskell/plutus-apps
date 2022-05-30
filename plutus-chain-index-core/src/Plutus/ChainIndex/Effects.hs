@@ -12,16 +12,17 @@ module Plutus.ChainIndex.Effects(
     , stakeValidatorFromHash
     , redeemerFromHash
     , txOutFromRef
+    , unspentTxOutFromRef
     , txFromTxId
     , utxoSetMembership
     , utxoSetAtAddress
     , utxoSetWithCurrency
-    , txsFromTxIds
     , txoSetAtAddress
+    , txsFromTxIds
     , getTip
     -- * Control effect
     , ChainIndexControlEffect(..)
-    , appendBlock
+    , appendBlocks
     , rollback
     , resumeSync
     , collectGarbage
@@ -30,13 +31,14 @@ module Plutus.ChainIndex.Effects(
 
 import Control.Monad.Freer.Extras.Pagination (PageQuery)
 import Control.Monad.Freer.TH (makeEffect)
-import Ledger (AssetClass, Datum, DatumHash, MintingPolicy, MintingPolicyHash, Redeemer, RedeemerHash, StakeValidator,
-               StakeValidatorHash, TxId, Validator, ValidatorHash)
+import Ledger (AssetClass, TxId)
 import Ledger.Credential (Credential)
 import Ledger.Tx (ChainIndexTxOut, TxOutRef)
 import Plutus.ChainIndex.Api (IsUtxoResponse, TxosResponse, UtxosResponse)
 import Plutus.ChainIndex.Tx (ChainIndexTx)
 import Plutus.ChainIndex.Types (ChainSyncBlock, Diagnostics, Point, Tip)
+import Plutus.V1.Ledger.Api (Datum, DatumHash, MintingPolicy, MintingPolicyHash, Redeemer, RedeemerHash, StakeValidator,
+                             StakeValidatorHash, Validator, ValidatorHash)
 
 data ChainIndexQueryEffect r where
 
@@ -54,6 +56,9 @@ data ChainIndexQueryEffect r where
 
     -- | Get the stake validator from a stake validator hash (if available)
     StakeValidatorFromHash :: StakeValidatorHash -> ChainIndexQueryEffect (Maybe StakeValidator)
+
+    -- | Get the TxOut from a TxOutRef (if available)
+    UnspentTxOutFromRef :: TxOutRef -> ChainIndexQueryEffect (Maybe ChainIndexTxOut)
 
     -- | Get the TxOut from a TxOutRef (if available)
     TxOutFromRef :: TxOutRef -> ChainIndexQueryEffect (Maybe ChainIndexTxOut)
@@ -86,8 +91,8 @@ makeEffect ''ChainIndexQueryEffect
 
 data ChainIndexControlEffect r where
 
-    -- | Add a new block to the chain index by giving a new tip and list of tx.
-    AppendBlock :: ChainSyncBlock -> ChainIndexControlEffect ()
+    -- | Add new blocks to the chain index.
+    AppendBlocks :: [ChainSyncBlock] -> ChainIndexControlEffect ()
 
     -- | Roll back to a previous state (previous tip)
     Rollback    :: Point -> ChainIndexControlEffect ()

@@ -1,6 +1,7 @@
 {-# LANGUAGE DataKinds         #-}
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE GADTs             #-}
+{-# LANGUAGE NamedFieldPuns    #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes        #-}
 {-# LANGUAGE TypeApplications  #-}
@@ -22,6 +23,7 @@ import Data.Text qualified as Text
 import Plutus.Contract.Wallet (export)
 import Plutus.PAB.Core.ContractInstance.STM (InstancesState)
 import Plutus.PAB.Core.ContractInstance.STM qualified as Instances
+import Wallet.API qualified as WAPI
 import Wallet.Effects (WalletEffect (BalanceTx, OwnPaymentPubKeyHash, SubmitTxn, TotalFunds, WalletAddSignature, YieldUnbalancedTx))
 import Wallet.Error (WalletAPIError (RemoteClientFunctionNotYetSupported), throwOtherError)
 import Wallet.Types (ContractInstanceId)
@@ -36,6 +38,7 @@ handleWalletClient
     :: forall m effs.
     ( LastMember m effs
     , MonadIO m
+    , Member WAPI.NodeClientEffect effs
     , Member (Error WalletAPIError) effs
     , Member (Reader Cardano.Api.ProtocolParameters) effs
     , Member (Reader InstancesState) effs
@@ -64,7 +67,8 @@ handleWalletClient config cidM event = do
             throwError $ RemoteClientFunctionNotYetSupported "Cardano.Wallet.RemoteClient.BalanceTx"
 
         YieldUnbalancedTx utx -> do
-            case export protocolParams networkId utx of
+            WAPI.Params { WAPI.pSlotConfig } <- WAPI.getClientParams
+            case export protocolParams networkId pSlotConfig utx of
                 Left err -> throwOtherError $ Text.pack $ show err
                 Right ex -> do
                   case cidM of

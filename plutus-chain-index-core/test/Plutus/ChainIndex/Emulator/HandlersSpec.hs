@@ -1,7 +1,6 @@
 {-# LANGUAGE DataKinds         #-}
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE MonoLocalBinds    #-}
-{-# LANGUAGE NamedFieldPuns    #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections     #-}
 {-# LANGUAGE TypeApplications  #-}
@@ -12,23 +11,24 @@ import Control.Lens
 import Control.Monad (forM)
 import Control.Monad.Freer (Eff, interpret, reinterpret, runM)
 import Control.Monad.Freer.Error (Error, runError)
-import Control.Monad.Freer.Extras (LogMessage, LogMsg (..), handleLogWriter)
+import Control.Monad.Freer.Extras (LogMessage, LogMsg, handleLogWriter)
 import Control.Monad.Freer.State (State, runState)
 import Control.Monad.Freer.Writer (runWriter)
 import Control.Monad.IO.Class (liftIO)
 import Data.Default (def)
+import Data.Maybe (isJust)
 import Data.Sequence (Seq)
 import Data.Set qualified as S
 import Generators qualified as Gen
 import Ledger (outValue)
-import Plutus.ChainIndex (ChainIndexLog, Page (pageItems), PageQuery (PageQuery), appendBlock, txFromTxId,
-                          utxoSetMembership, utxoSetWithCurrency)
-import Plutus.ChainIndex.Api (IsUtxoResponse (isUtxo), UtxosResponse (UtxosResponse))
+import Plutus.ChainIndex (ChainIndexLog, ChainSyncBlock (Block), Page (pageItems), PageQuery (PageQuery),
+                          TxProcessOption (TxProcessOption, tpoStoreTx), appendBlocks, citxTxId, txFromTxId,
+                          unspentTxOutFromRef, utxoSetMembership, utxoSetWithCurrency)
+import Plutus.ChainIndex.Api (UtxosResponse (UtxosResponse), isUtxo)
 import Plutus.ChainIndex.ChainIndexError (ChainIndexError)
 import Plutus.ChainIndex.Effects (ChainIndexControlEffect, ChainIndexQueryEffect)
 import Plutus.ChainIndex.Emulator.Handlers (ChainIndexEmulatorState, handleControl, handleQuery)
-import Plutus.ChainIndex.Tx (_ValidTx, citxOutputs, citxTxId)
-import Plutus.ChainIndex.Types (ChainSyncBlock (..), TxProcessOption (..))
+import Plutus.ChainIndex.Tx (_ValidTx, citxOutputs)
 import Plutus.V1.Ledger.Value (AssetClass (AssetClass), flattenValue)
 
 import Hedgehog (Property, assert, forAll, property, (===))
@@ -45,6 +45,9 @@ tests = do
     , testGroup "utxoSetAtAddress"
       [ testProperty "each txOutRef should be unspent" eachTxOutRefAtAddressShouldBeUnspentSpec
       ]
+    , testGroup "unspentTxOutFromRef"
+      [ testProperty "get unspent tx out from ref" eachTxOutRefAtAddressShouldHaveTxOutSpec
+      ]
     , testGroup "utxoSetWithCurrency"
       [ testProperty "each txOutRef should be unspent" eachTxOutRefWithCurrencyShouldBeUnspentSpec
       , testProperty "should restrict to non-ADA currencies" cantRequestForTxOutRefsWithAdaSpec
@@ -52,6 +55,7 @@ tests = do
     , testGroup "BlockProcessOption"
       [ testProperty "do not store txs" doNotStoreTxs
       ]
+
     ]
 
 -- | Tests we can correctly query a tx in the database using a tx id. We also
@@ -61,7 +65,7 @@ txFromTxIdSpec = property $ do
   (tip, block@(fstTx:_)) <- forAll $ Gen.evalTxGenState Gen.genNonEmptyBlock
   unknownTxId <- forAll Gen.genRandomTxId
   txs <- liftIO $ runEmulatedChainIndex mempty $ do
-    appendBlock (Block tip (map (, def) block))
+    appendBlocks [Block tip (map (, def) block)]
     tx <- txFromTxId (view citxTxId fstTx)
     tx' <- txFromTxId unknownTxId
     pure (tx, tx')
@@ -79,12 +83,29 @@ eachTxOutRefAtAddressShouldBeUnspentSpec = property $ do
 
   result <- liftIO $ runEmulatedChainIndex mempty $ do
     -- Append the generated block in the chain index
-    appendBlock (Block tip (map (, def) block))
+    appendBlocks [Block tip (map (, def) block)]
     utxoSetFromBlockAddrs block
 
   case result of
     Left _           -> Hedgehog.assert False
     Right utxoGroups -> S.fromList (concat utxoGroups) === view Gen.txgsUtxoSet state
+
+-- | After generating and appending a block in the chain index, verify that
+-- querying the chain index with each of the addresses in the block returns
+-- unspent 'TxOutRef's with presented 'TxOut's.
+eachTxOutRefAtAddressShouldHaveTxOutSpec :: Property
+eachTxOutRefAtAddressShouldHaveTxOutSpec = property $ do
+  ((tip, block), _) <- forAll $ Gen.runTxGenState Gen.genNonEmptyBlock
+
+  result <- liftIO $ runEmulatedChainIndex mempty $ do
+    -- Append the generated block in the chain index
+    appendBlocks [Block tip (map (, def) block)]
+    utxos <- utxoSetFromBlockAddrs block
+    traverse unspentTxOutFromRef (concat utxos)
+
+  case result of
+    Left _        -> Hedgehog.assert False
+    Right utxouts -> Hedgehog.assert $ all isJust utxouts
 
 -- | After generating and appending a block in the chain index, verify that
 -- querying the chain index with each of the asset classes in the block returns
@@ -100,7 +121,7 @@ eachTxOutRefWithCurrencyShouldBeUnspentSpec = property $ do
 
   result <- liftIO $ runEmulatedChainIndex mempty $ do
     -- Append the generated block in the chain index
-    appendBlock (Block tip (map (, def) block))
+    appendBlocks [Block tip (map (, def) block)]
 
     forM assetClasses $ \ac -> do
       let pq = PageQuery 200 Nothing
@@ -120,7 +141,7 @@ cantRequestForTxOutRefsWithAdaSpec = property $ do
 
   result <- liftIO $ runEmulatedChainIndex mempty $ do
     -- Append the generated block in the chain index
-    appendBlock (Block tip (map (, def) block))
+    appendBlocks [Block tip (map (, def) block)]
 
     let pq = PageQuery 200 Nothing
     UtxosResponse _ utxoRefs <- utxoSetWithCurrency pq (AssetClass ("", ""))
@@ -137,7 +158,7 @@ doNotStoreTxs :: Property
 doNotStoreTxs = property $ do
   ((tip, block), state) <- forAll $ Gen.runTxGenState Gen.genNonEmptyBlock
   result <- liftIO $ runEmulatedChainIndex mempty $ do
-    appendBlock (Block tip (map (, TxProcessOption{tpoStoreTx=False}) block))
+    appendBlocks [Block tip (map (, TxProcessOption{tpoStoreTx=False}) block)]
     tx <- txFromTxId (view citxTxId (head block))
     utxosFromAddr <- utxoSetFromBlockAddrs block
     utxosStored <- traverse utxoSetMembership (S.toList (view Gen.txgsUtxoSet state))

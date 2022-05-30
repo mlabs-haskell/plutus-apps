@@ -13,6 +13,8 @@
 {-# LANGUAGE AllowAmbiguousTypes        #-}
 {-# LANGUAGE ConstraintKinds            #-}
 {-# LANGUAGE DataKinds                  #-}
+{-# LANGUAGE DeriveDataTypeable         #-}
+{-# LANGUAGE DerivingVia                #-}
 {-# LANGUAGE FlexibleContexts           #-}
 {-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE GADTs                      #-}
@@ -37,6 +39,7 @@ module Plutus.Contract.Test.ContractModel.Internal
       --
       -- $contractModel
       ContractModel(..)
+    , HasActions(..)
       -- ** Model state
     , ModelState(..)
     , contractState
@@ -78,6 +81,7 @@ module Plutus.Contract.Test.ContractModel.Internal
     -- $dynamicLogic
     , DL
     , action
+    , waitUntilDL
     , anyAction
     , anyActions
     , anyActions_
@@ -89,6 +93,7 @@ module Plutus.Contract.Test.ContractModel.Internal
     , assertModel
     , stopping
     , weight
+    , getSize
     , monitor
 
     -- * Properties
@@ -109,6 +114,7 @@ module Plutus.Contract.Test.ContractModel.Internal
     -- ** Model properties
     , propSanityCheckModel
     , propSanityCheckAssertions
+    , propSanityCheckReactive
     -- ** Coverage checking options
     , CoverageOptions
     , defaultCoverageOptions
@@ -116,6 +122,7 @@ module Plutus.Contract.Test.ContractModel.Internal
     , checkCoverage
     , coverageIndex
     , quickCheckWithCoverage
+    , quickCheckWithCoverageAndResult
     -- ** Emulator properties
     , propRunActions_
     , propRunActions
@@ -136,10 +143,13 @@ module Plutus.Contract.Test.ContractModel.Internal
     --
     -- $noLockedFunds
     , NoLockedFundsProof(..)
+    , defaultNLFP
     , checkNoLockedFundsProof
     , checkNoLockedFundsProofFast
-    , checkNoLockedFundsProofWithWiggleRoom
-    , checkNoLockedFundsProofWithWiggleRoomFast
+    , NoLockedFundsProofLight(..)
+    , checkNoLockedFundsProofLight
+    , checkNoLockedFundsProofWithOptions
+    , checkNoLockedFundsProofFastWithOptions
     -- $checkNoPartiality
     , Whitelist
     , whitelistOk
@@ -157,7 +167,7 @@ import Plutus.Trace.Effects.EmulatedWalletAPI (EmulatedWalletAPI)
 import Plutus.Trace.Effects.EmulatorControl (EmulatorControl)
 import Plutus.Trace.Effects.RunContract (RunContract)
 import Plutus.Trace.Effects.Waiting (Waiting)
-import Plutus.Trace.Emulator (initialChainState)
+import Plutus.Trace.Emulator (initialChainState, waitUntilSlot)
 import Plutus.Trace.Emulator.Types (ContractHandle (..), ContractInstanceMsg (..), ContractInstanceTag,
                                     EmulatorRuntimeError (..), UserThreadMsg (..), cilMessage)
 
@@ -173,6 +183,7 @@ import Control.Monad.State (MonadState, State)
 import Control.Monad.State qualified as State
 import Control.Monad.Writer qualified as Writer
 import Data.Aeson qualified as JSON
+import Data.Data
 import Data.Foldable
 import Data.IORef
 import Data.List
@@ -184,7 +195,6 @@ import Data.Row.Records (labels')
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text qualified as Text
-import Data.Typeable
 
 import Ledger.Ada qualified as Ada
 import Ledger.Index
@@ -192,7 +202,7 @@ import Ledger.Slot
 import Ledger.Value (AssetClass)
 import Plutus.Contract (Contract, ContractError, ContractInstanceId, Endpoint, endpoint)
 import Plutus.Contract.Schema (Input)
-import Plutus.Contract.Test
+import Plutus.Contract.Test hiding (not)
 import Plutus.Contract.Test.ContractModel.Symbolics
 import Plutus.Contract.Test.Coverage
 import Plutus.Trace.Effects.EmulatorControl (discardWallets)
@@ -205,11 +215,11 @@ import PlutusTx.Coverage
 import PlutusTx.ErrorCodes
 import Streaming qualified as S
 import Test.QuickCheck.DynamicLogic.Monad qualified as DL
-import Test.QuickCheck.StateModel hiding (Action, Actions (..), arbitraryAction, initialState, monitoring, nextState,
-                                   pattern Actions, perform, precondition, shrinkAction, stateAfter)
+import Test.QuickCheck.StateModel hiding (Action, Actions (..), actionName, arbitraryAction, initialState, monitoring,
+                                   nextState, pattern Actions, perform, precondition, shrinkAction, stateAfter)
 import Test.QuickCheck.StateModel qualified as StateModel
 
-import Test.QuickCheck hiding (ShrinkState, checkCoverage, (.&&.), (.||.))
+import Test.QuickCheck hiding (ShrinkState, checkCoverage, getSize, (.&&.), (.||.))
 import Test.QuickCheck qualified as QC
 import Test.QuickCheck.Monadic (PropertyM, monadic)
 import Test.QuickCheck.Monadic qualified as QC
@@ -226,6 +236,8 @@ import Control.Monad.Freer.Writer (Writer (..), runWriter, tell)
 import Data.Void
 import Plutus.Contract.Types (IsContract (..))
 import Prettyprinter
+
+import Data.Generics.Uniplate.Data (universeBi)
 
 -- | Key-value map where keys and values have three indices that can vary between different elements
 --   of the map. Used to store `ContractHandle`s, which are indexed over observable state, schema,
@@ -331,6 +343,7 @@ data ModelState state = ModelState
         { _currentSlot    :: Slot
         , _balanceChanges :: Map Wallet SymValue
         , _minted         :: SymValue
+        , _symTokens      :: Set SymToken
         , _assertions     :: [(String, Bool)]
         , _assertionsOk   :: Bool
         , _contractState  :: state
@@ -341,7 +354,7 @@ instance Functor ModelState where
   fmap f m = m { _contractState = f (_contractState m) }
 
 dummyModelState :: state -> ModelState state
-dummyModelState s = ModelState 0 Map.empty mempty [] True s
+dummyModelState s = ModelState 1 Map.empty mempty mempty mempty True s
 
 -- | The `Spec` monad is a state monad over the `ModelState` with reader and writer components to keep track
 --   of newly created symbolic tokens. It is used exclusively by the `nextState` function to model the effects
@@ -391,6 +404,12 @@ type SpecificationEmulatorTrace a =
 -- `ModelState` type, which in addition to @state@ tracks common features of the blockchain, like
 -- wallet balances and the current slot.
 
+class (Eq (Action state), Show (Action state)) => HasActions state where
+  getAllSymtokens :: Action state -> Set SymToken
+
+instance {-# OVERLAPPABLE #-} (Eq (Action state), Show (Action state), Data (Action state)) => HasActions state where
+  getAllSymtokens = Set.fromList . universeBi
+
 -- | A `ContractModel` instance captures everything that is needed to generate and run tests of a
 --   contract or set of contracts. It specifies among other things
 --
@@ -402,8 +421,7 @@ type SpecificationEmulatorTrace a =
 
 class ( Typeable state
       , Show state
-      , Show (Action state)
-      , Eq (Action state)
+      , HasActions state
       , (forall w s e p. Eq (ContractInstanceKey state w s e p))
       , (forall w s e p. Show (ContractInstanceKey state w s e p))
       ) => ContractModel state where
@@ -441,11 +459,26 @@ class ( Typeable state
     --   `anyActions`.
     arbitraryAction :: ModelState state -> Gen (Action state)
 
+    -- | The name of an Action, used to report statistics.
+    actionName :: Action state -> String
+    actionName = head . words . show
+
+    -- | The probability that we will generate a `WaitUntil` in a given state
+    waitProbability :: ModelState state -> Double
+    waitProbability _ = 0.1
+
+    -- | Control the distribution of how long `WaitUntil` waits
+    arbitraryWaitInterval :: ModelState state -> Gen Slot
+    arbitraryWaitInterval s = Slot <$> choose (1,max 10 (head [ 5*(k-1) | k <- [0..], 2^k > n]))
+      where
+        Slot n = _currentSlot s
+
     -- | The initial state, before any actions have been performed.
     initialState :: state
 
     -- | The initial handles
     initialInstances :: [StartContract state]
+    initialInstances = []
 
     -- | The `precondition` function decides if a given action is valid in a given state. Typically
     --   actions generated by `arbitraryAction` will satisfy the precondition, but if they don't
@@ -527,6 +560,7 @@ makeLensesFor [("_minted",         "mintedL")]         'ModelState
 makeLensesFor [("_tokenNameIndex", "tokenNameIndex")]  'ModelState
 makeLensesFor [("_assertions", "assertions")]          'ModelState
 makeLensesFor [("_assertionsOk", "assertionsOk")]      'ModelState
+makeLensesFor [("_symTokens", "symTokens")]            'ModelState
 
 -- | Get the current slot.
 --
@@ -610,7 +644,9 @@ runSpec :: Spec state ()
         -> Var AssetKey
         -> ModelState state
         -> ModelState state
-runSpec (Spec spec) v s = State.execState (runReaderT (fst <$> Writer.runWriterT spec) v) s
+runSpec (Spec spec) v s = flip State.execState s $ do
+  w <- runReaderT (snd <$> Writer.runWriterT spec) v
+  symTokens %= (Set.fromList w <>)
 
 -- | Check if a given action creates new symbolic tokens in a given `ModelState`
 createsTokens :: ContractModel state
@@ -625,6 +661,7 @@ modState l f = Spec $ State.modify $ over l f
 
 -- | Wait the given number of slots. Updates the `currentSlot` of the model state.
 wait :: ContractModel state => Integer -> Spec state ()
+wait 0 = return ()
 wait n = do
   Slot now <- viewModelState currentSlot
   nextReactiveState (Slot $ now + n)
@@ -767,6 +804,7 @@ contractAction s a = ContractAction (createsTokens s a) a
 
 instance ContractModel state => Show (StateModel.Action (ModelState state) a) where
     showsPrec p (ContractAction _ a) = showsPrec p a
+    showsPrec p (WaitUntil n)        = showParen (p >= 11) $ showString "WaitUntil " . showsPrec 11 n
     showsPrec p (Unilateral w)       = showParen (p >= 11) $ showString "Unilateral " . showsPrec 11 w
 
 deriving instance ContractModel state => Eq (StateModel.Action (ModelState state) a)
@@ -780,28 +818,54 @@ instance ContractModel state => StateModel (ModelState state) where
           --   contract instances and removing their private keys from the emulator state. This can
           --   be used to check that a wallet can *unilaterally* achieve a desired outcome, without
           --   the help of other wallets.
+        WaitUntil :: Slot -> StateModel.Action (ModelState state) ()
 
     type ActionMonad (ModelState state) = ContractMonad state
 
-    arbitraryAction s = do
-        a <- arbitraryAction s
-        return (Some (ContractAction (createsTokens s a) a))
+    actionName (ContractAction _ act) = actionName act
+    actionName (Unilateral _)         = "Unilateral"
+    actionName (WaitUntil _)          = "WaitUntil"
 
-    shrinkAction s (ContractAction _ a) = [ Some (contractAction s a') | a' <- shrinkAction s a ]
+    arbitraryAction s =
+        -- TODO: do we need some way to control the distribution
+        -- between actions and waits here?
+        frequency [(floor $ 100.0*(1.0-waitProbability s), do a <- arbitraryAction s
+                                                              return (Some (ContractAction (createsTokens s a) a)))
+                  ,(floor $ 100.0*waitProbability s, Some . WaitUntil . step <$> arbitraryWaitInterval s)]
+        where
+            slot = s ^. currentSlot
+            step n = slot + n
+
+    shrinkAction s (ContractAction _ a) =
+      [ Some (WaitUntil (Slot n')) | let Slot n = runSpec (nextState a) (Var 0) s ^. currentSlot
+                                   , n' <- n : shrink n
+                                   , Slot n' > s ^. currentSlot ] ++
+      [ Some (contractAction s a') | a' <- shrinkAction s a ]
+    shrinkAction s (WaitUntil (Slot n))        =
+      [ Some (WaitUntil (Slot n')) | n' <- shrink n, Slot n' > s ^. currentSlot ]
     shrinkAction _ _                    = []
 
-    initialState = ModelState { _currentSlot      = 0
-                              , _balanceChanges   = Map.empty
+    initialState = ModelState { _currentSlot      = 1
+                              , _balanceChanges   = Map.fromList [(w,mempty) | w <- knownWallets]
                               , _minted           = mempty
-                              , _assertions       = []
+                              , _assertions       = mempty
                               , _assertionsOk     = True
+                              , _symTokens        = mempty
                               , _contractState    = initialState
                               }
 
     nextState s (ContractAction _ cmd) v = runSpec (nextState cmd) v s
+    nextState s (WaitUntil n) _          = runSpec (() <$ waitUntil n) (error "unreachable") s
     nextState s Unilateral{} _           = s
 
-    precondition s (ContractAction _ cmd) = (s ^. assertionsOk) && precondition s cmd
+    -- Note that the order of the preconditions in this case matter - we want to run
+    -- `getAllSymtokens` last because its likely to be stricter than the user precondition
+    -- and so if the user relies on the lazyness of the Gen monad by using the precondition
+    -- to avoid duplicate checks in the precondition and generator we don't screw that up.
+    precondition s (ContractAction _ cmd) = s ^. assertionsOk
+                                          && precondition s cmd
+                                          && getAllSymtokens cmd `Set.isSubsetOf` (s ^. symTokens)
+    precondition s (WaitUntil n)          = n > s ^. currentSlot
     precondition _ _                      = True
 
     perform s (ContractAction _ cmd) envOuter = do
@@ -827,11 +891,23 @@ instance ContractModel state => StateModel (ModelState state) where
       let insts = instancesForOtherWallets w h
       mapM_ freezeContractInstance insts
       discardWallets (w /=)
+    perform _ (WaitUntil slot) _ = runEmulator_ $ \ _ -> lift . void $ waitUntilSlot slot
 
     postcondition _s _cmd _env _res = True
 
     monitoring (s0, s1) (ContractAction _ cmd) _env _res = monitoring (s0, s1) cmd
-    monitoring _ _ _ _                                   = id
+    monitoring (s0, _) (WaitUntil n@(Slot _n)) _ _                 =
+      tabulate "Wait interval" (bucket 10 diff) .
+      tabulate "Wait until" (bucket 10 _n)
+      where Slot diff = n - s0 ^. currentSlot
+            bucket size n | n < size = [ "<" ++ show size ]
+                          | size <= n
+                          , n < size*10 = [bucketIn size n]
+                          | otherwise = bucket (size*10) n
+            bucketIn size n =
+              let b = n `div` size in
+              show (b*size) ++ "-" ++ show (b*size+(size - 1))
+    monitoring _ _ _ _ = id
 
 -- We present a simplified view of test sequences, and DL test cases, so
 -- that users do not need to see the variables bound to results.
@@ -854,25 +930,20 @@ instance ContractModel state => StateModel (ModelState state) where
 -- Now the failing test can be rerun to check if changes code or model has fixed the problem.
 
 -- | A `Actions` is a list of intelligent and sophisticated `Action`s.
-newtype Actions s = Actions_ (Smart [Act s])
+
+-- We include a list of rejected action names.
+data Actions s = Actions_ [String] (Smart [Act s])
 
 {-# COMPLETE Actions #-}
 pattern Actions :: [Act s] -> Actions s
-pattern Actions as <- Actions_ (Smart _ as) where
-  Actions as = Actions_ (Smart 0 as)
+pattern Actions as <- Actions_ _ (Smart _ as) where
+  Actions as = Actions_ [] (Smart 0 as)
 
-data Act s = Bind (Var AssetKey) (Action s)
-           | NoBind (Var AssetKey) (Action s)
+data Act s = Bind {varOf :: Var AssetKey, actionOf :: Action s }
+           | NoBind {varOf :: Var AssetKey, actionOf :: Action s}
+           | ActWaitUntil (Var ()) Slot
 
 deriving instance ContractModel s => Eq (Act s)
-
-actionOf :: Act s -> Action s
-actionOf (Bind _ a)   = a
-actionOf (NoBind _ a) = a
-
-varOf :: Act s -> Var AssetKey
-varOf (Bind v _)   = v
-varOf (NoBind v _) = v
 
 isBind :: Act s -> Bool
 isBind Bind{} = True
@@ -881,9 +952,14 @@ isBind _      = False
 actionsFromList :: [Action s] -> Actions s
 actionsFromList = Actions . zipWith NoBind (Var <$> [0..])
 
+varNumOf :: Act s -> Int
+varNumOf (ActWaitUntil (Var i) _) = i
+varNumOf act | Var i <- varOf act = i
+
 instance ContractModel state => Show (Act state) where
-  showsPrec d (Bind (Var i) a) = showParen (d >= 11) $ showString ("tok" ++ show i ++ " := ") . showsPrec 0 a
-  showsPrec d (NoBind _ a)     = showsPrec d a
+  showsPrec d (Bind (Var i) a)   = showParen (d >= 11) $ showString ("tok" ++ show i ++ " := ") . showsPrec 0 a
+  showsPrec d (ActWaitUntil _ n) = showParen (d >= 11) $ showString ("WaitUntil ") . showsPrec 11 n
+  showsPrec d (NoBind _ a)       = showsPrec d a
 
 instance ContractModel state => Show (Actions state) where
   showsPrec d (Actions as)
@@ -899,13 +975,19 @@ instance ContractModel s => Arbitrary (Actions s) where
 
 toStateModelActions :: ContractModel state =>
                         Actions state -> StateModel.Actions (ModelState state)
-toStateModelActions (Actions_ (Smart k s)) =
-  StateModel.Actions_ (Smart k [ varOf act := ContractAction (isBind act) (actionOf act) | act <- s ])
+toStateModelActions (Actions_ rs (Smart k s)) =
+  StateModel.Actions_ rs (Smart k $ map mkStep s)
+    where mkStep (ActWaitUntil v n) = v := WaitUntil n
+          mkStep act                = varOf act := ContractAction (isBind act) (actionOf act)
 
 fromStateModelActions :: StateModel.Actions (ModelState s) -> Actions s
-fromStateModelActions (StateModel.Actions_ (Smart k s)) =
-  Actions_ (Smart k [ if b then Bind (Var i) act else NoBind (Var i) act
-                    | Var i := ContractAction b act <- s])
+fromStateModelActions (StateModel.Actions_ rs (Smart k s)) =
+  Actions_ rs (Smart k (catMaybes $ map mkAct s))
+  where
+    mkAct :: Step (ModelState s) -> Maybe (Act s)
+    mkAct (Var i := ContractAction b act) = Just $ if b then Bind (Var i) act else NoBind (Var i) act
+    mkAct (v     := WaitUntil n)          = Just $ ActWaitUntil v n
+    mkAct (_     := Unilateral{})         = Nothing
 
 -- | An instance of a `DL` scenario generated by `forAllDL`. It is turned into a `Actions` before
 --   being passed to the property argument of `forAllDL`, but in case of a failure the generated
@@ -935,9 +1017,10 @@ data FailedStep state = Action (Act state)
 
 deriving instance ContractModel s => Show (FailedStep s)
 instance ContractModel s => Eq (FailedStep s) where
-  Assert s == Assert s' = s == s'
-  Action a == Action a' = actionOf a == actionOf a'
-  _ == _                = False
+  Assert s == Assert s'                                   = s == s'
+  Action (ActWaitUntil _ n) == Action (ActWaitUntil _ n') = n == n'
+  Action a == Action a'                                   = actionOf a == actionOf a'
+  _ == _                                                  = False
 
 instance ContractModel s => Show (DLTest s) where
     show (BadPrecondition as bads s) =
@@ -974,8 +1057,9 @@ toDLTest :: ContractModel state =>
 toDLTest (BadPrecondition steps acts s) =
   DL.BadPrecondition (toDLTestSteps steps) (map conv acts) (dummyModelState s)
     where
-        conv (Action a) = Some (ContractAction (isBind a) (actionOf a))
-        conv (Assert e) = Error e
+        conv (Action (ActWaitUntil _ n)) = Some (WaitUntil n)
+        conv (Action a)                  = Some (ContractAction (isBind a) (actionOf a))
+        conv (Assert e)                  = Error e
 toDLTest (Looping steps) =
   DL.Looping (toDLTestSteps steps)
 toDLTest (Stuck steps s) =
@@ -989,14 +1073,16 @@ toDLTestSteps steps = map toDLTestStep steps
 
 toDLTestStep :: ContractModel state =>
                   TestStep state -> DL.TestStep (ModelState state)
-toDLTestStep (Do act)    = DL.Do $ varOf act StateModel.:= ContractAction (isBind act) (actionOf act)
-toDLTestStep (Witness a) = DL.Witness a
+toDLTestStep (Do (ActWaitUntil v n)) = DL.Do $ v StateModel.:= WaitUntil n
+toDLTestStep (Do act)                = DL.Do $ varOf act StateModel.:= ContractAction (isBind act) (actionOf act)
+toDLTestStep (Witness a)             = DL.Witness a
 
 fromDLTest :: forall s. DL.DynLogicTest (ModelState s) -> DLTest s
 fromDLTest (DL.BadPrecondition steps acts s) =
   BadPrecondition (fromDLTestSteps steps) (concatMap conv acts) (_contractState s)
   where conv :: Any (StateModel.Action (ModelState s)) -> [FailedStep s]
         conv (Some (ContractAction _ act)) = [Action $ NoBind (Var 0) act]
+        conv (Some (WaitUntil n))          = [Action $ ActWaitUntil (Var 0) n]
         conv (Some Unilateral{})           = []
         conv (Error e)                     = [Assert e]
 fromDLTest (DL.Looping steps) =
@@ -1011,6 +1097,7 @@ fromDLTestSteps steps = concatMap fromDLTestStep steps
 
 fromDLTestStep :: DL.TestStep (ModelState state) -> [TestStep state]
 fromDLTestStep (DL.Do (v := ContractAction b act)) = [Do $ if b then Bind v act else NoBind v act]
+fromDLTestStep (DL.Do (v := WaitUntil n))          = [Do $ ActWaitUntil v n]
 fromDLTestStep (DL.Do (_ := Unilateral{}))         = []
 fromDLTestStep (DL.Witness a)                      = [Witness a]
 
@@ -1106,6 +1193,10 @@ action cmd = do
   s <- getModelState
   DL.action (contractAction s cmd)
 
+-- | Generate a specific action. Fails if the action's `precondition` is not satisfied.
+waitUntilDL :: ContractModel state => Slot -> DL state ()
+waitUntilDL = DL.action . WaitUntil
+
 -- | Generate a random action using `arbitraryAction`. The generated action is guaranteed to satisfy
 --   its `precondition`. Fails with `Stuck` if no action satisfying the precondition can be found
 --   after 100 attempts.
@@ -1120,7 +1211,7 @@ anyActions :: Int -> DL state ()
 anyActions = DL.anyActions
 
 -- | Generate a sequence of random actions using `arbitraryAction`. All actions satisfy their
---   `precondition`s. Actions are generated until the `stopping` stage is reached.
+--   `precondition`s. Actions may be generated until the `stopping` stage is reached; the expected length is size/2.
 anyActions_ :: DL state ()
 anyActions_ = DL.anyActions_
 
@@ -1134,15 +1225,16 @@ anyActions_ = DL.anyActions_
 --   Conversely, before the stopping phase, branches starting with `stopping`
 --   are avoided unless there are no other possible choices.
 --
---   For example, here is the definition of `anyActions_`:
+--   For example, here is the definition of `anyActions`:
 --
 -- @
--- `anyActions_` = `stopping` `Control.Applicative.<|>` (`anyAction` >> `anyActions_`)
+-- `anyActions` n = `stopping` `Control.Applicative.<|>` pure ()
+--                        `Control.Applicative.<|>` (`weight` (fromIntegral n) >> `anyAction` >> `anyActions` n)
 -- @
 --
---   The effect of this definition is that the second branch will be taken until the desired number
+--   The effect of this definition is that the second or third branch will be taken until the desired number
 --   of actions have been generated, at which point the `stopping` branch will be taken and
---   generation stops (or continues with whatever comes after the `anyActions_` call).
+--   generation stops (or continues with whatever comes after the `anyActions` call).
 --
 --   Now, it might not be possible, or too hard, to find a way to terminate a scenario. For
 --   instance, this scenario has no finite test cases:
@@ -1179,6 +1271,20 @@ stopping = DL.stopping
 --   (`action`/`anyAction`) or random generation (`forAllQ`), or they will have no effect.
 weight :: Double -> DL state ()
 weight = DL.weight
+
+-- | Sometimes test case generation should depend on QuickCheck's size
+--   parameter. This can be accessed using @getSize@. For example, @anyActions_@ is defined by
+--
+-- @
+-- anyActions_ = do n <- getSize
+--                  anyActions (n `div` 2 + 1)
+-- @
+--
+-- so that we generate a random number of actions, but on average half the size (which is about the same as
+-- the average random positive integer, or length of a list).
+
+getSize :: DL state Int
+getSize = DL.getSize
 
 -- | The `monitor` function allows you to collect statistics of your testing using QuickCheck
 --   functions like `Test.QuickCheck.label`, `Test.QuickCheck.collect`, `Test.QuickCheck.classify`,
@@ -1233,6 +1339,7 @@ forAllUniqueDL nextVar state dl prop = DL.forAllUniqueDL nextVar state dl (prop 
 
 instance ContractModel s => DL.DynLogicModel (ModelState s) where
     restricted (ContractAction _ act) = restricted act
+    restricted WaitUntil{}            = False
     restricted Unilateral{}           = True
 
 instance GetModelState (DL state) where
@@ -1280,25 +1387,28 @@ makeLenses ''CoverageOptions
 -- * not to cover any source locations in the validator scripts.
 defaultCoverageOptions :: CoverageOptions
 defaultCoverageOptions = CoverageOptions { _checkCoverage = False
-                                         , _endpointCoverageReq = \ _ _ -> 20
+                                         , _endpointCoverageReq = \ _ _ -> 0
                                          , _coverageIndex = mempty
                                          , _coverageIORef = Nothing }
 
 -- | Run QuickCheck on a property that tracks coverage and print its coverage report.
-quickCheckWithCoverage :: QC.Testable prop => CoverageOptions -> (CoverageOptions -> prop) -> IO CoverageReport
-quickCheckWithCoverage copts prop = do
+quickCheckWithCoverage :: QC.Testable prop => QC.Args -> CoverageOptions -> (CoverageOptions -> prop) -> IO CoverageReport
+quickCheckWithCoverage qcargs opts prop = fst <$> quickCheckWithCoverageAndResult qcargs opts prop
+
+quickCheckWithCoverageAndResult :: QC.Testable prop => QC.Args -> CoverageOptions -> (CoverageOptions -> prop) -> IO (CoverageReport, Result)
+quickCheckWithCoverageAndResult qcargs copts prop = do
   copts <- case copts ^. coverageIORef of
     Nothing -> do
       ref <- newIORef mempty
       return $ copts { _coverageIORef = Just ref }
     _ -> return copts
-  QC.quickCheck $ prop $ copts { _checkCoverage = True }
+  res <- QC.quickCheckWithResult qcargs $ prop $ copts { _checkCoverage = True }
   case copts ^. coverageIORef of
     Nothing -> fail "Unreachable case in quickCheckWithCoverage"
     Just ref -> do
       report <- readIORef ref
-      putStrLn . show $ pprCoverageReport (copts ^. coverageIndex) report
-      return report
+      when (chatty qcargs) $ putStrLn . show $ pprCoverageReport (copts ^. coverageIndex) report
+      return (report, res)
 
 finalChecks :: ContractModel state
             => CheckOptions
@@ -1324,7 +1434,14 @@ finalChecks opts copts predicate prop = do
         QC.monitor $ counterexample (show err)
         QC.assert False
       _ -> return ()
-    addEndpointCoverage copts keys' events $ checkPredicateInnerStream opts (noMainThreadCrashes .&&. predicate keys' outerEnv) (void stream) debugOutput assertResult
+    let cover report | copts ^. checkCoverage
+                     , Just ref <- copts ^. coverageIORef =
+                       report `deepseq`
+                        (QC.monitor $ \ p -> ioProperty $ do
+                           modifyIORef ref (report<>)
+                           return p)
+                     | otherwise = pure ()
+    addEndpointCoverage copts keys' events $ checkPredicateInnerStream opts (noMainThreadCrashes .&&. predicate keys' outerEnv) (void stream) debugOutput assertResult cover
     where
         debugOutput :: Monad m => String -> PropertyM m ()
         debugOutput = QC.monitor . whenFail . putStrLn
@@ -1344,7 +1461,7 @@ addEndpointCoverage :: ContractModel state
                     -> PropertyM (ContractMonad state) a
                     -> PropertyM (ContractMonad state) a
 addEndpointCoverage copts keys es pm
-  | copts ^. checkCoverage, Just ref <- copts ^. coverageIORef = do
+  | copts ^. checkCoverage = do
     x <- pm
     let -- Endpoint covereage
         epsToCover = [(instanceTag k, contractInstanceEndpoints k) | Key k <- keys]
@@ -1354,13 +1471,8 @@ addEndpointCoverage copts keys es pm
                                     (Text.unpack (unContractInstanceTag t) ++ " at endpoint " ++ e)
                          | (t, eps) <- epsToCover
                          , e <- eps ]
-        coverageReport = getCoverageReport es
     endpointCovers `deepseq`
       (QC.monitor . foldr (.) id $ endpointCovers)
-    coverageReport `deepseq`
-      (QC.monitor $ \ p -> ioProperty $ do
-         modifyIORef ref (coverageReport<>)
-         return p)
     QC.monitor QC.checkCoverage
     return x
   | otherwise = pm
@@ -1454,9 +1566,11 @@ propRunActionsWithOptions' opts copts predicate actions =
             snd <$> runActionsInState StateModel.initialState actions)
     where
         finalState = StateModel.stateAfter actions
+        finalPredicate :: [SomeContractInstanceKey state] -> Env {- Outer env -} -> TracePredicate
         finalPredicate keys' outerEnv = predicate finalState .&&. checkBalances finalState outerEnv
                                                              .&&. checkNoCrashes keys'
                                                              .&&. checkNoOverlappingTokens
+                                                             .&&. checkSlot finalState
 
 asserts :: ModelState state -> Property
 asserts finalState = foldr (QC..&&.) (property True) [ counterexample ("assertSpec failed: " ++ s) b
@@ -1491,14 +1605,21 @@ checkBalances :: ModelState state
               -> TracePredicate
 checkBalances s envOuter = Map.foldrWithKey (\ w sval p -> walletFundsChange w sval .&&. p) (pure True) (s ^. balanceChanges)
   where
-    walletFundsChange w sval =
+    walletFundsChange :: Wallet -> SymValue -> TracePredicate
+    walletFundsChange w sval = TracePredicate $
       -- see Note [The Env contract]
       flip postMapM ((,) <$> Folds.instanceOutcome @() (toContract getEnvContract) envContractInstanceTag
                          <*> L.generalize ((,) <$> Folds.walletFunds w <*> Folds.walletFees w)) $ \(outcome, (finalValue', fees)) -> do
         dist <- Freer.ask @InitialDistribution
         case outcome of
           Done envInner -> do
-            let lookup (SymToken outerVar idx) = fromJust . Map.lookup idx $ fold (Map.lookup (lookUpVar envOuter outerVar) envInner)
+            let lookupMaybe (SymToken outerVar idx) = do
+                  innerVar <- lookUpVarMaybe envOuter outerVar
+                  tokenMap <- Map.lookup innerVar envInner
+                  Map.lookup idx tokenMap
+                lookup st = case lookupMaybe st of
+                  Nothing  -> error $ "Trying to look up unknown symbolic token: " ++ show st ++ ",\nare you using a custom implementation of getAllSymtokens? If not, please report this as a bug."
+                  Just tok -> tok
                 dlt = toValue lookup sval
                 initialValue = fold (dist ^. at w)
                 finalValue = finalValue' P.+ fees
@@ -1509,13 +1630,21 @@ checkBalances s envOuter = Map.foldrWithKey (\ w sval p -> walletFundsChange w s
                     , " " <+> viaShow dlt] ++
                     if initialValue == finalValue
                     then ["but they did not change"]
-                    else ["but they changed by", " " <+> viaShow (finalValue P.- initialValue)]
+                    else ["but they changed by", " " <+> viaShow (finalValue P.- initialValue),
+                          "a discrepancy of",    " " <+> viaShow (finalValue P.- initialValue P.- dlt)]
             pure result
           _ -> error "I am the pope"
 
+checkSlot :: ModelState state
+          -> TracePredicate
+checkSlot st =
+  let lastSlot@(Slot s) = 1 + st ^. currentSlot in
+  assertChainEvents' (\evs -> "Final emulator slot " ++ show (maximum [ s | SlotAdd (Slot s) <- evs ]) ++ " doesn't match model slot " ++ show s)
+                                  (\evs -> lastSlot == maximum [ s | SlotAdd s <- evs ])
+
 -- See the uniqueness requirement in Note [Symbolic Tokens and Symbolic Values]
 checkNoOverlappingTokens :: TracePredicate
-checkNoOverlappingTokens = flip postMapM (Folds.instanceOutcome @() (toContract getEnvContract) envContractInstanceTag) $ \ outcome ->
+checkNoOverlappingTokens = TracePredicate $ flip postMapM (Folds.instanceOutcome @() (toContract getEnvContract) envContractInstanceTag) $ \ outcome ->
   case outcome of
     Done envInner -> do
      let tokens = concatMap Map.elems $ Map.elems envInner
@@ -1540,8 +1669,22 @@ propSanityCheckModel =
 
 -- | Sanity check a `ContractModel`. Ensures that all assertions in
 -- the property generation succeed.
-propSanityCheckAssertions :: forall state. ContractModel state => Property
-propSanityCheckAssertions = property (asserts . stateAfter @state)
+propSanityCheckAssertions :: forall state. ContractModel state => Actions state -> Property
+propSanityCheckAssertions as = monadic (flip State.evalState mempty) $ do
+  -- We do this to gather all the statistics we need
+  _ <- runActionsInState StateModel.initialState (toStateModelActions as)
+  return (asserts $ stateAfter as)
+
+-- | Sanity check a `ContractModel`. Ensures that `nextReactiveState` is idempotent.
+propSanityCheckReactive :: forall state. (ContractModel state, Eq state) => Actions state -> Positive Integer -> Positive Integer -> Property
+propSanityCheckReactive as (Positive sl) (Positive sl') =
+    let s0 = stateAfter as
+        sl1 = s0 ^. currentSlot + Slot sl
+        sl2 = sl1 + Slot sl'
+        s1 = runSpec (nextReactiveState sl1 >> nextReactiveState sl2) (error "unreachable") s0
+        s2 = runSpec (nextReactiveState sl2) (error "unreachable") s0
+    in counterexample "Balance changes not idempotent" (s1 ^. balanceChanges === s2 ^. balanceChanges)
+    QC..&&. counterexample "Contract state changes not idempotent" (s1 ^. contractState === s2 ^. contractState)
 
 -- $noLockedFunds
 -- Showing that funds can not be locked in the contract forever.
@@ -1563,7 +1706,23 @@ data NoLockedFundsProof model = NoLockedFundsProof
   , nlfpWalletStrategy :: Wallet -> DL model ()
     -- ^ A strategy for each wallet to recover as much (or more) funds as the main strategy would
     --   give them in a given state, without the assistance of any other wallet.
+  , nlfpOverhead       :: ModelState model -> SymValue
+    -- ^ An initial amount of overhead value that may be lost - e.g. setup fees for scripts that
+    -- can't be recovered.
+  , nlfpErrorMargin    :: ModelState model -> SymValue
+    -- ^ The total amount of margin for error in the value collected by the WalletStrategy compared
+    -- to the MainStrategy. This is useful if your contract contains rounding code that makes the order
+    -- of operations have a small but predictable effect on the value collected by different wallets.
   }
+data NoLockedFundsProofLight model = NoLockedFundsProofLight
+  { nlfplMainStrategy :: DL model () }
+
+-- | The default skeleton of a NoLockedFundsProof - doesn't permit any overhead or error margin.
+defaultNLFP :: NoLockedFundsProof model
+defaultNLFP = NoLockedFundsProof { nlfpMainStrategy = return ()
+                                 , nlfpWalletStrategy = const (return ())
+                                 , nlfpOverhead = const mempty
+                                 , nlfpErrorMargin = const mempty }
 
 -- | Check a `NoLockedFundsProof`. Each test will generate an arbitrary sequence of actions
 --   (`anyActions_`) and ask the `nlfpMainStrategy` to recover all funds locked by the contract
@@ -1575,67 +1734,86 @@ data NoLockedFundsProof model = NoLockedFundsProof
 
 checkNoLockedFundsProof
   :: (ContractModel model)
-  => CheckOptions
-  -> NoLockedFundsProof model
+  => NoLockedFundsProof model
   -> Property
-checkNoLockedFundsProof = checkNoLockedFundsProofWithWiggleRoom 0
+checkNoLockedFundsProof = checkNoLockedFundsProofWithOptions defaultCheckOptionsContractModel
 
 checkNoLockedFundsProofFast
   :: (ContractModel model)
+  => NoLockedFundsProof model
+  -> Property
+checkNoLockedFundsProofFast = checkNoLockedFundsProofFastWithOptions defaultCheckOptionsContractModel
+
+checkNoLockedFundsProofWithOptions
+  :: (ContractModel model)
   => CheckOptions
   -> NoLockedFundsProof model
   -> Property
-checkNoLockedFundsProofFast _ = checkNoLockedFundsProofWithWiggleRoomFast 0
-
-checkNoLockedFundsProofWithWiggleRoom
-  :: (ContractModel model)
-  => Integer
-  -> CheckOptions
-  -> NoLockedFundsProof model
-  -> Property
-checkNoLockedFundsProofWithWiggleRoom wiggle options =
-  checkNoLockedFundsProofWithWiggleRoom' wiggle prop
+checkNoLockedFundsProofWithOptions options =
+  checkNoLockedFundsProof' prop
   where
-    prop = propRunActionsWithOptions' options defaultCoverageOptions (\ _ -> pure True)
+    prop = propRunActionsWithOptions' options defaultCoverageOptions (\ _ -> TracePredicate $ pure True)
 
-checkNoLockedFundsProofWithWiggleRoomFast
+checkNoLockedFundsProofFastWithOptions
   :: (ContractModel model)
-  => Integer
+  => CheckOptions
   -> NoLockedFundsProof model
   -> Property
-checkNoLockedFundsProofWithWiggleRoomFast wiggle = checkNoLockedFundsProofWithWiggleRoom' wiggle (const $ property True)
+checkNoLockedFundsProofFastWithOptions _ = checkNoLockedFundsProof' (const $ property True)
 
-checkNoLockedFundsProofWithWiggleRoom'
+checkNoLockedFundsProof'
   :: (ContractModel model)
-  => Integer
-  -> (StateModel.Actions (ModelState model) -> Property)
+  => (StateModel.Actions (ModelState model) -> Property)
   -> NoLockedFundsProof model
   -> Property
-checkNoLockedFundsProofWithWiggleRoom' wiggle run NoLockedFundsProof{nlfpMainStrategy   = mainStrat,
-                                                                     nlfpWalletStrategy = walletStrat } =
+checkNoLockedFundsProof' run NoLockedFundsProof{nlfpMainStrategy   = mainStrat,
+                                                nlfpWalletStrategy = walletStrat,
+                                                nlfpOverhead       = overhead,
+                                                nlfpErrorMargin    = wiggle } =
     forAllDL anyActions_ $ \ (Actions as) ->
     forAllUniqueDL (nextVarIdx as) (stateAfter $ Actions as) mainStrat $ \ (Actions as') ->
-          let s = stateAfter $ Actions (as ++ as') in
-            foldl (QC..&&.) (counterexample "Main run prop" (run (toStateModelActions $ Actions $ as ++ as')) QC..&&. (counterexample "Main strategy" . counterexample (show . Actions $ as ++ as') $ prop s))
-                            [ walletProp as w bal | (w, bal) <- Map.toList (s ^. balanceChanges) ]
+          let s0 = (stateAfter $ Actions as)
+              s = stateAfter $ Actions (as ++ as') in
+            foldl (QC..&&.) (counterexample "Main run prop" (run (toStateModelActions $ Actions $ as ++ as')) QC..&&. (counterexample "Main strategy" . counterexample (show . Actions $ as ++ as') $ prop s0 s))
+                            [ walletProp s0 as w bal | (w, bal) <- Map.toList (s ^. balanceChanges)
+                                                     , not $ bal `symLeq` (s0 ^. balanceChange w) ]
+                                                     -- if the main strategy leaves w with <= the starting value, then doing nothing is a good wallet strategy.
     where
-        nextVarIdx as = 1 + maximum ([0] ++ [ i | Var i <- varOf <$> as ])
-        prop s =
+        nextVarIdx as = 1 + maximum ([0] ++ [ i | i <- varNumOf <$> as ])
+        prop s0 s =
           let lockedVal = lockedValue s
-          in (counterexample ("Locked funds should be zero, but they are\n  " ++ show lockedVal) $ symIsZero lockedVal)
+          in (counterexample ("Locked funds should be at most " ++ show (overhead s0) ++ ", but they are\n  " ++ show lockedVal)
+            $ symLeq lockedVal (overhead s0))
 
-        walletProp as w bal = DL.forAllUniqueDL (nextVarIdx as) (stateAfter $ Actions as) (DL.action (Unilateral w) >> walletStrat w) $ \ acts ->
+        walletProp s0 as w bal =
+          DL.forAllUniqueDL (nextVarIdx as) s0 (DL.action (Unilateral w) >> walletStrat w) $ \ acts ->
           let Actions as' = fromStateModelActions acts
+              wig = wiggle s0
               err  = "Unilateral strategy for " ++ show w ++ " should have gotten it at least\n" ++
                      "  " ++ show bal ++ "\n" ++
+                     concat [ "with wiggle room\n" ++ "  " ++ show wig ++ "\n"
+                            | wig /= mempty ] ++
                      "but it got\n" ++
                      "  " ++ show bal'
               bal' = stateAfter (Actions $ as ++ as') ^. balanceChange w
               smacts = toStateModelActions (Actions as) <> acts
               err' = "The ContractModel's Unilateral behaviour for " ++ show w ++ " does not match the actual behaviour for actions:\n"
                    ++ show smacts
-          in counterexample err (symLeqWiggle wiggle bal bal')
+          in counterexample err (symLeq bal (bal' <> wig))
           QC..&&. counterexample err' (run smacts)
+
+checkNoLockedFundsProofLight
+  :: ContractModel model
+  => NoLockedFundsProofLight model
+  -> Property
+checkNoLockedFundsProofLight NoLockedFundsProofLight{nlfplMainStrategy = mainStrat} =
+  forAllDL anyActions_ $ \ (Actions as) ->
+    forAllUniqueDL (nextVarIdx as) (stateAfter $ Actions as) mainStrat $ \ (Actions as') ->
+      counterexample "Main run prop" (run (toStateModelActions $ Actions $ as ++ as'))
+  where
+    nextVarIdx as = 1 + maximum ([0] ++ [ i | Var i <- varOf <$> as ])
+    run = propRunActionsWithOptions' defaultCheckOptionsContractModel
+                                     defaultCoverageOptions (\ _ -> TracePredicate $ pure True)
 
 -- | A whitelist entry tells you what final log entry prefixes
 -- are acceptable for a given error
@@ -1710,10 +1888,9 @@ checkErrorWhitelistWithOptions opts copts whitelist acts = property $ go check a
     checkEvent _                                            = False
 
     checkEvents :: [ChainEvent] -> Bool
-    checkEvents events = all checkEvent [ f | (TxnValidationFail _ _ _ (ScriptFailure f) _) <- events ]
+    checkEvents events = all checkEvent [ f | (TxnValidationFail _ _ _ (ScriptFailure f) _ _) <- events ]
 
     go :: TracePredicate -> Actions m -> Property
     go check actions = monadic (flip State.evalState mempty) $ finalChecks opts copts (\ _ _ -> check) $ do
                         QC.run initiateWallets
-
                         snd <$> runActionsInState StateModel.initialState (toStateModelActions actions)

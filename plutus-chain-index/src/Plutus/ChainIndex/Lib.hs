@@ -1,8 +1,11 @@
-{-# LANGUAGE DataKinds         #-}
-{-# LANGUAGE LambdaCase        #-}
-{-# LANGUAGE NamedFieldPuns    #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TupleSections     #-}
+{-# LANGUAGE DataKinds          #-}
+{-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE FlexibleContexts   #-}
+{-# LANGUAGE GADTs              #-}
+{-# LANGUAGE LambdaCase         #-}
+{-# LANGUAGE NumericUnderscores #-}
+{-# LANGUAGE OverloadedStrings  #-}
+{-# LANGUAGE TupleSections      #-}
 {-| Using the chain index as a library.
 
 A minimal example that just syncs the chain index:
@@ -10,7 +13,7 @@ A minimal example that just syncs the chain index:
 @
 `withDefaultRunRequirements` $ \runReq -> do
 
-    syncHandler <- `showingProgress` $ `defaultChainSyncHandler` runReq
+    syncHandler <- `defaultChainSyncHandler` runReq
 
     `syncChainIndex` `defaultConfig` runReq syncHandler
 
@@ -32,21 +35,21 @@ module Plutus.ChainIndex.Lib (
     -- ** Synchronisation handlers
     , ChainSyncHandler
     , ChainSyncEvent(..)
-    , defaultChainSyncHandler
+    , EventsQueue
+    , storeChainSyncHandler
     , storeFromBlockNo
     , filterTxs
-    , showingProgress
+    , runChainIndexDuringSync
     -- * Utils
     , getTipSlot
 ) where
 
-import Control.Concurrent.MVar (newMVar)
 import Control.Monad.Freer (Eff)
 import Control.Monad.Freer.Extras.Beam (BeamEffect, BeamLog (SqlLog))
 import Control.Monad.Freer.Extras.Log qualified as Log
 import Data.Default (def)
 import Data.Functor (void)
-import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import Data.Pool qualified as Pool
 import Database.Beam.Migrate.Simple (autoMigrate)
 import Database.Beam.Sqlite qualified as Sqlite
 import Database.Beam.Sqlite.Migrate qualified as Sqlite
@@ -59,29 +62,25 @@ import Cardano.BM.Trace (Trace, logDebug, logError, nullTracer)
 
 import Cardano.Protocol.Socket.Client qualified as C
 import Cardano.Protocol.Socket.Type (epochSlots)
-import Ledger.Slot (Slot (..))
+import Control.Concurrent.STM (atomically, newTVarIO)
+import Control.Concurrent.STM.TBMQueue (TBMQueue, writeTBMQueue)
 import Plutus.ChainIndex (ChainIndexLog (BeamLogItem), RunRequirements (RunRequirements), getResumePoints,
                           runChainIndexEffects, tipBlockNo)
 import Plutus.ChainIndex qualified as CI
 import Plutus.ChainIndex.Compatibility (fromCardanoBlock, fromCardanoPoint, fromCardanoTip, tipFromCardanoBlock)
 import Plutus.ChainIndex.Config qualified as Config
 import Plutus.ChainIndex.DbSchema (checkedSqliteDb)
-import Plutus.ChainIndex.Effects (ChainIndexControlEffect (..), ChainIndexQueryEffect (..), appendBlock, resumeSync,
-                                  rollback)
+import Plutus.ChainIndex.Effects (ChainIndexControlEffect, ChainIndexQueryEffect)
 import Plutus.ChainIndex.Logging qualified as Logging
-import Plutus.Monitoring.Util (runLogEffects)
+import Plutus.Monitoring.Util (PrettyObject (PrettyObject), convertLog, runLogEffects)
 
 -- | Generate the requirements to run the chain index effects given logging configuration and chain index configuration.
 withRunRequirements :: CM.Configuration -> Config.ChainIndexConfig -> (RunRequirements -> IO ()) -> IO ()
 withRunRequirements logConfig config cont = do
-  Sqlite.withConnection (Config.cicDbPath config) $ \conn -> do
-
-    (trace :: Trace IO ChainIndexLog, _) <- setupTrace_ logConfig "chain-index"
-
-    -- Optimize Sqlite for write performance, halves the sync time.
-    -- https://sqlite.org/wal.html
-    Sqlite.execute_ conn "PRAGMA journal_mode=WAL"
-    Sqlite.runBeamSqliteDebug (logDebug trace . (BeamLogItem . SqlLog)) conn $ do
+  pool <- Pool.createPool (Sqlite.open (Config.cicDbPath config) >>= setupConn) Sqlite.close 5 1_000_000 5
+  (trace :: Trace IO (PrettyObject ChainIndexLog), _) <- setupTrace_ logConfig "chain-index"
+  Pool.withResource pool $ \conn -> do
+    Sqlite.runBeamSqliteDebug (logDebug (convertLog PrettyObject trace) . (BeamLogItem . SqlLog)) conn $ do
         autoMigrate Sqlite.migrationBackend checkedSqliteDb
 
     -- Automatically delete the input when an output from a matching input/output pair is deleted.
@@ -94,8 +93,15 @@ withRunRequirements logConfig config cont = do
         \                                 AND input_row_out_ref = old.output_row_out_ref; \
         \END"
 
-    stateMVar <- newMVar mempty
-    cont $ RunRequirements trace stateMVar conn (Config.cicSecurityParam config)
+  stateTVar <- newTVarIO mempty
+  cont $ RunRequirements trace stateTVar pool (Config.cicSecurityParam config)
+
+  where
+    setupConn conn = do
+        -- Optimize Sqlite for write performance, halves the sync time.
+        -- https://sqlite.org/wal.html
+        Sqlite.execute_ conn "PRAGMA journal_mode=WAL;"
+        return conn
 
 -- | Generate the requirements to run the chain index effects given default configurations.
 withDefaultRunRequirements :: (RunRequirements -> IO ()) -> IO ()
@@ -115,6 +121,7 @@ data ChainSyncEvent
     -- ^ Append the given block. The tip is the current tip of the node, which is newer than the tip of the block during syncing.
     | RollBackward CI.Point CI.Tip
     -- ^ Roll back to the given point. The tip is current tip of the node.
+    deriving (Show)
 
 toCardanoChainSyncHandler :: RunRequirements -> ChainSyncHandler -> C.ChainSyncEvent -> IO ()
 toCardanoChainSyncHandler runReq handler = \case
@@ -124,19 +131,16 @@ toCardanoChainSyncHandler runReq handler = \case
         let ciBlock = fromCardanoBlock block
         case ciBlock of
             Left err    ->
-                logError (CI.trace runReq) (CI.ConversionFailed err)
+                logError (convertLog PrettyObject $ CI.trace runReq) (CI.ConversionFailed err)
             Right txs ->
                 handler (RollForward (CI.Block (tipFromCardanoBlock block) (map (, def) txs)) (fromCardanoTip ct))
 
 -- | A handler for chain synchronisation events.
 type ChainSyncHandler = ChainSyncEvent -> IO ()
+type EventsQueue = TBMQueue ChainSyncEvent
 
--- | The default chain synchronisation event handler. Updates the in-memory state and the database.
-defaultChainSyncHandler :: RunRequirements -> ChainSyncHandler
-defaultChainSyncHandler runReq evt = void $ runChainIndexDuringSync runReq $ case evt of
-    (RollForward block _)  -> appendBlock block
-    (RollBackward point _) -> rollback point
-    (Resume point)         -> resumeSync point
+storeChainSyncHandler :: EventsQueue -> ChainSyncHandler
+storeChainSyncHandler eventsQueue = atomically . writeTBMQueue eventsQueue
 
 -- | Changes the given @ChainSyncHandler@ to only store transactions with a block number no smaller than the given one.
 storeFromBlockNo :: CI.BlockNumber -> ChainSyncHandler -> ChainSyncHandler
@@ -170,27 +174,6 @@ getTipSlot config = do
     }
   pure slotNo
 
-showProgress :: IORef Integer -> Slot -> Slot -> IO ()
-showProgress lastProgressRef (Slot tipSlot) (Slot blockSlot) = do
-    lastProgress <- readIORef lastProgressRef
-    let pct = (100 * blockSlot) `div` tipSlot
-    if pct > lastProgress then do
-        putStrLn $ "Syncing (" ++ show pct ++ "%)"
-        writeIORef lastProgressRef pct
-    else pure ()
-
--- | Changes the given @ChainSyncHandler@ to print out the synchronisation progress percentages.
-showingProgress :: ChainSyncHandler -> IO ChainSyncHandler
-showingProgress handler = do
-    -- The primary purpose of this query is to get the first response of the node for potential errors before opening the DB and starting the chain index.
-    -- See #69.
-    lastProgressRef <- newIORef 0
-    pure $ \case
-        (RollForward block@(CI.Block (CI.Tip blockSlot _ _) _) tip@(CI.Tip tipSlot _ _)) -> do
-            showProgress lastProgressRef tipSlot blockSlot
-            handler $ RollForward block tip
-        evt -> handler evt
-
 -- | Synchronise the chain index with the node using the given handler.
 syncChainIndex :: Config.ChainIndexConfig -> RunRequirements -> ChainSyncHandler -> IO ()
 syncChainIndex config runReq syncHandler = do
@@ -203,7 +186,6 @@ syncChainIndex config runReq syncHandler = do
         resumePoints
         (toCardanoChainSyncHandler runReq syncHandler)
 
-
 runChainIndexDuringSync
   :: RunRequirements
   -> Eff '[ChainIndexQueryEffect, ChainIndexControlEffect, BeamEffect] a
@@ -212,7 +194,7 @@ runChainIndexDuringSync runReq effect = do
     errOrResult <- runChainIndexEffects runReq effect
     case errOrResult of
         Left err -> do
-            runLogEffects (CI.trace runReq) $ Log.logError $ CI.Err err
+            runLogEffects (convertLog PrettyObject $ CI.trace runReq) $ Log.logError $ CI.Err err
             pure Nothing
         Right result -> do
             pure (Just result)

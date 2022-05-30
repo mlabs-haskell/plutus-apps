@@ -62,6 +62,7 @@ serveChainIndex =
     pure NoContent
     :<|> serveFromHashApi
     :<|> (E.txOutFromRef >=> handleMaybe)
+    :<|> (E.unspentTxOutFromRef >=> handleMaybe)
     :<|> (E.txFromTxId >=> handleMaybe)
     :<|> E.utxoSetMembership
     :<|> (\(UtxoAtAddressRequest pq c) -> E.utxoSetAtAddress (fromMaybe def pq) c)

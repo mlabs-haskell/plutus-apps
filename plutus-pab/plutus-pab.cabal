@@ -54,7 +54,6 @@ library
     ghc-options: -Wunused-packages
     exposed-modules:
         Cardano.Api.NetworkId.Extra
-        Cardano.Api.ProtocolParameters
         Cardano.BM.Data.Tracer.Extras
         Cardano.Chain
         Cardano.ChainIndex.ChainIndex
@@ -172,6 +171,7 @@ library
         prettyprinter >=1.1.0.1,
         quickcheck-instances -any,
         random -any,
+        resource-pool -any,
         row-types -any,
         servant -any,
         servant-client -any,
@@ -222,6 +222,7 @@ test-suite plutus-pab-test-light
         hedgehog -any,
         plutus-contract -any,
         plutus-pab,
+        plutus-ledger -any,
         plutus-ledger-constraints -any,
         plutus-tx -any,
         quickcheck-instances -any,

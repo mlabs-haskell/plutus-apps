@@ -16,8 +16,7 @@ module Wallet.Emulator.Stream(
     , initialChainState
     , initialDist
     , initialState
-    , slotConfig
-    , feeConfig
+    , params
     , runTraceStream
     -- * Stream manipulation
     , takeUntilSlot
@@ -45,8 +44,8 @@ import Data.Maybe (fromMaybe)
 import Data.Set qualified as Set
 import Ledger.AddressMap qualified as AM
 import Ledger.Blockchain (Block, OnChainTx (Valid))
-import Ledger.Fee (FeeConfig)
 import Ledger.Slot (Slot)
+import Ledger.Tx (CardanoTx (..), Tx)
 import Ledger.Value (Value)
 import Plutus.ChainIndex (ChainIndexError)
 import Streaming (Stream)
@@ -62,7 +61,7 @@ import Wallet.Emulator.MultiAgent (EmulatorState, EmulatorTimeEvent (EmulatorTim
 import Wallet.Emulator.Wallet (Wallet, mockWalletAddress)
 
 -- TODO: Move these two to 'Wallet.Emulator.XXX'?
-import Ledger.TimeSlot (SlotConfig)
+import Ledger.Params (Params)
 import Plutus.Contract.Trace (InitialDistribution, defaultDist, knownWallets)
 import Plutus.Trace.Emulator.ContractInstance (EmulatorRuntimeError)
 
@@ -120,7 +119,7 @@ runTraceStream :: forall effs.
             , Error EmulatorRuntimeError
             ] ()
     -> Stream (Of (LogMessage EmulatorEvent)) (Eff effs) (Maybe EmulatorErr, EmulatorState)
-runTraceStream conf@EmulatorConfig{_slotConfig, _feeConfig} =
+runTraceStream conf@EmulatorConfig{_params} =
     fmap (first (either Just (const Nothing)))
     . S.hoist (pure . run)
     . runStream @(LogMessage EmulatorEvent) @_ @'[]
@@ -132,7 +131,7 @@ runTraceStream conf@EmulatorConfig{_slotConfig, _feeConfig} =
     . wrapError ChainIndexErr
     . wrapError AssertionErr
     . wrapError InstanceErr
-    . EM.processEmulated _slotConfig _feeConfig
+    . EM.processEmulated _params
     . subsume
     . subsume @(State EmulatorState)
     . raiseEnd
@@ -140,11 +139,10 @@ runTraceStream conf@EmulatorConfig{_slotConfig, _feeConfig} =
 data EmulatorConfig =
     EmulatorConfig
         { _initialChainState :: InitialChainState -- ^ State of the blockchain at the beginning of the simulation. Can be given as a map of funds to wallets, or as a block of transactions.
-        , _slotConfig        :: SlotConfig -- ^ Set the start time of slot 0 and the length of one slot
-        , _feeConfig         :: FeeConfig -- ^ Configure the fee of a transaction
+        , _params            :: Params -- ^ Set the protocol parameters, network ID and slot configuration for the emulator.
         } deriving (Eq, Show)
 
-type InitialChainState = Either InitialDistribution EM.TxPool
+type InitialChainState = Either InitialDistribution [Tx]
 
 -- | The wallets' initial funds
 initialDist :: InitialChainState -> InitialDistribution
@@ -158,15 +156,14 @@ initialDist = either id (walletFunds . map Valid) where
 instance Default EmulatorConfig where
   def = EmulatorConfig
           { _initialChainState = Left defaultDist
-          , _slotConfig = def
-          , _feeConfig = def
+          , _params = def
           }
 
 initialState :: EmulatorConfig -> EM.EmulatorState
 initialState EmulatorConfig{_initialChainState} =
     either
         (EM.emulatorStateInitialDist . Map.mapKeys EM.mockWalletPaymentPubKeyHash)
-        EM.emulatorStatePool
+        (EM.emulatorStatePool . map EmulatorTx)
         _initialChainState
 
 data EmulatorErr =

@@ -47,14 +47,13 @@ import Plutus.Contract.Resumable (Request (Request, itID, rqID, rqRequest),
                                   Response (Response, rspItID, rspResponse, rspRqID))
 
 import Control.Monad.Freer.Extras.Log (LogMessage, LogMsg, LogObserve, logDebug, logWarn, surroundDebug)
-import Ledger (POSIXTime, POSIXTimeRange, PaymentPubKeyHash, Slot, SlotRange)
+import Ledger (POSIXTime, POSIXTimeRange, Params (..), PaymentPubKeyHash, Slot, SlotRange)
 import Ledger.Constraints.OffChain (UnbalancedTx)
 import Ledger.TimeSlot qualified as TimeSlot
 import Ledger.Tx (CardanoTx)
 import Plutus.ChainIndex (ChainIndexQueryEffect)
 import Plutus.ChainIndex.Effects qualified as ChainIndexEff
-import Plutus.Contract.Effects (ChainIndexQuery (DatumFromHash, GetTip, MintingPolicyFromHash, RedeemerFromHash, StakeValidatorFromHash, TxFromTxId, TxOutFromRef, TxoSetAtAddress, TxsFromTxIds, UtxoSetAtAddress, UtxoSetMembership, UtxoSetWithCurrency, ValidatorFromHash),
-                                ChainIndexResponse (DatumHashResponse, GetTipResponse, MintingPolicyHashResponse, RedeemerHashResponse, StakeValidatorHashResponse, TxIdResponse, TxIdsResponse, TxOutRefResponse, TxoSetAtResponse, UtxoSetAtResponse, UtxoSetMembershipResponse, UtxoSetWithCurrencyResponse, ValidatorHashResponse))
+import Plutus.Contract.Effects (ChainIndexQuery (..), ChainIndexResponse (..))
 import Plutus.Contract.Wallet qualified as Wallet
 import Wallet.API (WalletAPIError)
 import Wallet.Effects (NodeClientEffect, WalletEffect)
@@ -148,11 +147,11 @@ handleTimeNotifications =
     RequestHandler $ \targetTime_ ->
         surroundDebug @Text "handleTimeNotifications" $ do
             currentSlot <- Wallet.Effects.getClientSlot
-            slotConfig <- Wallet.Effects.getClientSlotConfig
-            let targetSlot_ = TimeSlot.posixTimeToEnclosingSlot slotConfig targetTime_
+            Params { pSlotConfig } <- Wallet.Effects.getClientParams
+            let targetSlot_ = TimeSlot.posixTimeToEnclosingSlot pSlotConfig targetTime_
             logDebug $ SlotNoticationTargetVsCurrent targetSlot_ currentSlot
             guard (currentSlot >= targetSlot_)
-            pure $ TimeSlot.slotToEndPOSIXTime slotConfig currentSlot
+            pure $ TimeSlot.slotToEndPOSIXTime pSlotConfig currentSlot
 
 handleCurrentSlot ::
     forall effs a.
@@ -174,8 +173,8 @@ handleCurrentTime ::
 handleCurrentTime =
     RequestHandler $ \_ ->
         surroundDebug @Text "handleCurrentTime" $ do
-            slotConfig <- Wallet.Effects.getClientSlotConfig
-            TimeSlot.slotToEndPOSIXTime slotConfig <$> Wallet.Effects.getClientSlot
+            Params { pSlotConfig }  <- Wallet.Effects.getClientParams
+            TimeSlot.slotToEndPOSIXTime pSlotConfig <$> Wallet.Effects.getClientSlot
 
 handleTimeToSlotConversions ::
     forall effs.
@@ -186,8 +185,8 @@ handleTimeToSlotConversions ::
 handleTimeToSlotConversions =
     RequestHandler $ \poxisTimeRange ->
         surroundDebug @Text "handleTimeToSlotConversions" $ do
-            slotConfig <- Wallet.Effects.getClientSlotConfig
-            pure $ TimeSlot.posixTimeRangeToContainedSlotRange slotConfig poxisTimeRange
+            Params { pSlotConfig }  <- Wallet.Effects.getClientParams
+            pure $ TimeSlot.posixTimeRangeToContainedSlotRange pSlotConfig poxisTimeRange
 
 handleUnbalancedTransactions ::
     forall effs.
@@ -230,11 +229,12 @@ handleChainIndexQueries = RequestHandler $ \chainIndexQuery ->
         RedeemerFromHash h         -> RedeemerHashResponse <$> ChainIndexEff.redeemerFromHash h
         TxOutFromRef txOutRef      -> TxOutRefResponse <$> ChainIndexEff.txOutFromRef txOutRef
         TxFromTxId txid            -> TxIdResponse <$> ChainIndexEff.txFromTxId txid
+        UnspentTxOutFromRef ref    -> UnspentTxOutResponse <$> ChainIndexEff.unspentTxOutFromRef ref
         UtxoSetMembership txOutRef -> UtxoSetMembershipResponse <$> ChainIndexEff.utxoSetMembership txOutRef
         UtxoSetAtAddress pq c      -> UtxoSetAtResponse <$> ChainIndexEff.utxoSetAtAddress pq c
         UtxoSetWithCurrency pq ac  -> UtxoSetWithCurrencyResponse <$> ChainIndexEff.utxoSetWithCurrency pq ac
-        TxsFromTxIds txids         -> TxIdsResponse <$> ChainIndexEff.txsFromTxIds txids
         TxoSetAtAddress pq c       -> TxoSetAtResponse <$> ChainIndexEff.txoSetAtAddress pq c
+        TxsFromTxIds txids         -> TxIdsResponse <$> ChainIndexEff.txsFromTxIds txids
         GetTip                     -> GetTipResponse <$> ChainIndexEff.getTip
 
 handleOwnInstanceIdQueries ::

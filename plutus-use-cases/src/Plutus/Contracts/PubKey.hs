@@ -23,9 +23,9 @@ import Data.Map qualified as Map
 import GHC.Generics (Generic)
 
 import Ledger hiding (initialise, to)
-import Ledger.Contexts as V
 import Ledger.Typed.Scripts (TypedValidator)
 import Ledger.Typed.Scripts qualified as Scripts
+import Plutus.V1.Ledger.Contexts as V
 import PlutusTx qualified
 
 import Ledger.Constraints qualified as Constraints
@@ -45,7 +45,7 @@ typedValidator = Scripts.mkTypedValidatorParam @PubKeyContract
     $$(PlutusTx.compile [|| mkValidator ||])
     $$(PlutusTx.compile [|| wrap ||])
     where
-        wrap = Scripts.wrapValidator
+        wrap = Scripts.mkUntypedValidator
 
 data PubKeyError =
     ScriptOutputMissing PaymentPubKeyHash
@@ -84,6 +84,6 @@ pubKeyContract pk vl = mapError (review _PubKeyError   ) $ do
     case refs of
         []                   -> throwing _ScriptOutputMissing pk
         [outRef] -> do
-            ciTxOut <- txOutFromRef outRef
+            ciTxOut <- unspentTxOutFromRef outRef
             pure (outRef, ciTxOut, inst)
         _                    -> throwing _MultipleScriptOutputs pk

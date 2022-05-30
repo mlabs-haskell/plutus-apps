@@ -24,9 +24,7 @@ module Ledger.CardanoWallet(
     paymentPubKey
     ) where
 
-import Cardano.Address.Derivation (XPrv)
 import Cardano.Crypto.Wallet qualified as Crypto
-import Cardano.Wallet.Primitive.Types qualified as CW
 import Codec.Serialise (serialise)
 import Crypto.Hash qualified as Crypto
 import Data.Aeson (FromJSON, ToJSON)
@@ -45,7 +43,7 @@ import Ledger.Crypto qualified as Crypto
 import Plutus.V1.Ledger.Bytes (LedgerBytes (getLedgerBytes))
 import Servant.API (FromHttpApiData, ToHttpApiData)
 
-newtype MockPrivateKey = MockPrivateKey { unMockPrivateKey :: XPrv }
+newtype MockPrivateKey = MockPrivateKey { unMockPrivateKey :: Crypto.XPrv }
 
 instance Show MockPrivateKey where
     show = T.unpack . encodeByteString . Crypto.unXPrv . unMockPrivateKey
@@ -59,11 +57,11 @@ instance Hashable MockPrivateKey where
 -- | Emulated wallet with a key and a passphrase
 data MockWallet =
     MockWallet
-        { mwWalletId   :: CW.WalletId
+        { mwWalletId   :: Crypto.Digest Crypto.Blake2b_160
         , mwPaymentKey :: MockPrivateKey
         , mwStakeKey   :: Maybe MockPrivateKey
-        }
-        deriving Show
+        , mwPrintAs    :: Maybe String
+        } deriving Show
 
 -- | Wrapper for config files and APIs
 newtype WalletNumber = WalletNumber { getWallet :: Integer }
@@ -72,7 +70,7 @@ newtype WalletNumber = WalletNumber { getWallet :: Integer }
     deriving anyclass (FromJSON, ToJSON)
 
 fromWalletNumber :: WalletNumber -> MockWallet
-fromWalletNumber (WalletNumber i) = fromSeed' (BSL.toStrict $ serialise i)
+fromWalletNumber (WalletNumber i) = (fromSeed' (BSL.toStrict $ serialise i)) { mwPrintAs = Just (show i) }
 
 fromSeed :: BS.ByteString -> Crypto.Passphrase -> MockWallet
 fromSeed bs passPhrase = fromSeedInternal (flip Crypto.generateFromSeed passPhrase) bs
@@ -81,12 +79,12 @@ fromSeed' :: BS.ByteString -> MockWallet
 fromSeed' = fromSeedInternal Crypto.generateFromSeed'
 
 fromSeedInternal :: (BS.ByteString -> Crypto.XPrv) -> BS.ByteString -> MockWallet
-fromSeedInternal seedGen bs = MockWallet{mwWalletId, mwPaymentKey, mwStakeKey} where
+fromSeedInternal seedGen bs = MockWallet{mwWalletId, mwPaymentKey, mwStakeKey, mwPrintAs = Nothing} where
     missing = max 0 (32 - BS.length bs)
     bs' = bs <> BS.replicate missing 0
     k = seedGen bs'
-    mwWalletId = CW.WalletId
-        $ fromMaybe (error "Ledger.CardanoWallet.fromSeed: digestFromByteString")
+    mwWalletId =
+        fromMaybe (error "Ledger.CardanoWallet.fromSeed: digestFromByteString")
         $ Crypto.digestFromByteString
         $ Crypto.hashWith Crypto.Blake2b_160
         $ getLedgerBytes

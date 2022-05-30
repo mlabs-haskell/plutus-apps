@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds           #-}
+{-# LANGUAGE DeriveDataTypeable  #-}
 {-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE FlexibleInstances   #-}
 {-# LANGUAGE GADTs               #-}
@@ -15,6 +16,7 @@ module Spec.Vesting (tests, prop_Vesting, prop_CheckNoLockedFundsProof, retrieve
 
 import Control.Lens hiding (elements)
 import Control.Monad (void, when)
+import Data.Data
 import Data.Default (Default (def))
 import Test.Tasty
 import Test.Tasty.HUnit qualified as HUnit
@@ -58,7 +60,7 @@ data VestingModel =
                , _t2Slot       :: Slot -- ^ The time for the second tranche
                , _t1Amount     :: Value -- ^ The size of the first tranche
                , _t2Amount     :: Value -- ^ The size of the second tranche
-               } deriving (Show, Eq)
+               } deriving (Show, Eq, Data)
 
 makeLenses 'VestingModel
 
@@ -74,8 +76,7 @@ instance ContractModel VestingModel where
 
   data Action VestingModel = Vest Wallet
                            | Retrieve Wallet Value
-                           | WaitUntil Slot
-                           deriving (Eq, Show)
+                           deriving (Eq, Show, Data)
 
   initialState = VestingModel
     { _vestedAmount = mempty
@@ -99,8 +100,6 @@ instance ContractModel VestingModel where
     Retrieve w val -> do
       callEndpoint @"retrieve funds" (handle $ WalletKey w) val
       delay 2
-
-    WaitUntil slot -> void $ Trace.waitUntilSlot slot
 
   -- Vest the sum of the two tranches
   nextState (Vest w) = do
@@ -127,11 +126,6 @@ instance ContractModel VestingModel where
       vestedAmount .= newAmount
     wait 2
 
-  nextState (WaitUntil s) = do
-    slot <- viewModelState currentSlot
-    when (slot < s) $ do
-      waitUntil s
-
   precondition s (Vest w) =  w `notElem` s ^. contractState . vested -- After a wallet has vested the contract shuts down
                           && mockWalletPaymentPubKeyHash w /= vestingOwner params -- The vesting owner shouldn't vest
                           && slot < t1 -- If you vest after slot 1 it can cause the vesting owner to terminate prematurely
@@ -148,22 +142,20 @@ instance ContractModel VestingModel where
       amount = s ^. contractState . vestedAmount
       newAmount = amount Numeric.- v
 
-  precondition s (WaitUntil slot') = s ^. currentSlot < slot'
-
   arbitraryAction s = frequency [ (1, Vest <$> genWallet)
                                 , (1, Retrieve <$> genWallet
                                                <*> (Ada.lovelaceValueOf
                                                    <$> choose (Ada.getLovelace Ledger.minAdaTxOut, valueOf amount Ada.adaSymbol Ada.adaToken)
                                                    )
                                   )
-                                , (1, WaitUntil . Slot <$> choose (n+1, n+30 :: Integer)) ]
+                                ]
     where
       amount   = s ^. contractState . vestedAmount
-      (Slot n) = s ^. currentSlot
 
-  shrinkAction _ (Vest _)             = []
-  shrinkAction _ (Retrieve w v)       = Retrieve w <$> shrinkValue v
-  shrinkAction _ (WaitUntil (Slot n)) = [ WaitUntil (Slot n') | n' <- shrink n ]
+
+
+  shrinkAction _ (Vest _)       = []
+  shrinkAction _ (Retrieve w v) = Retrieve w <$> shrinkValue v
 
 -- | Check that the amount of value left in the contract
 -- is at least the amount that remains locked at the current
@@ -197,7 +189,7 @@ prop_Vesting :: Actions VestingModel -> Property
 prop_Vesting = propRunActions_
 
 noLockProof :: NoLockedFundsProof VestingModel
-noLockProof = NoLockedFundsProof{
+noLockProof = defaultNLFP {
       nlfpMainStrategy   = mainStrat,
       nlfpWalletStrategy = walletStrat }
     where
@@ -208,7 +200,7 @@ noLockProof = NoLockedFundsProof{
             t2     <- viewContractState t2Slot
             slot   <- viewModelState currentSlot
             when (slot < t2 + Slot 1) $ do
-              action (WaitUntil $ t2 + Slot 1)
+              waitUntilDL $ t2 + Slot 1
             when (amount `gt` mempty) $ do
               action (Retrieve w1 amount)
 
@@ -217,7 +209,7 @@ noLockProof = NoLockedFundsProof{
                       | otherwise = return ()
 
 prop_CheckNoLockedFundsProof :: Property
-prop_CheckNoLockedFundsProof = checkNoLockedFundsProof defaultCheckOptionsContractModel noLockProof
+prop_CheckNoLockedFundsProof = checkNoLockedFundsProof noLockProof
 
 -- Tests
 

@@ -14,9 +14,9 @@ import Ledger qualified
 import Ledger.Ada qualified as Ada
 import Ledger.Time (POSIXTime)
 import Ledger.TimeSlot qualified as TimeSlot
-import Ledger.Value qualified as Value
 import Plutus.Contract.Test
 import Plutus.Contracts.SimpleEscrow
+import Plutus.Script.Utils.V1.Generators (someTokenValue)
 import Plutus.Trace.Emulator qualified as Trace
 
 import Test.Tasty
@@ -93,10 +93,10 @@ tests = testGroup "simple-escrow"
     ]
 
 token1 :: Integer -> Value
-token1 = Value.singleton "1111" "Token1"
+token1 = someTokenValue "Token1"
 
 token2 :: Integer -> Value
-token2 = Value.singleton "2222" "Token2"
+token2 = someTokenValue "Token2"
 
 options :: CheckOptions
 options =

@@ -34,6 +34,8 @@ library
         Plutus.Contracts.ErrorHandling
         Plutus.Contracts.Escrow
         Plutus.Contracts.SimpleEscrow
+        Plutus.Contracts.Tutorial.Escrow
+        Plutus.Contracts.Tutorial.EscrowStrict
         Plutus.Contracts.Future
         Plutus.Contracts.Game
         Plutus.Contracts.GameStateMachine
@@ -81,13 +83,13 @@ library
         plutus-ledger -any,
         plutus-ledger-api -any,
         plutus-ledger-constraints -any,
+        plutus-script-utils -any,
         template-haskell -any,
         lens -any,
         text -any,
         prettyprinter -any,
         hashable -any,
         freer-simple -any,
-        streaming -any,
         semigroups -any,
         openapi3 -any
 
@@ -110,6 +112,13 @@ test-suite plutus-use-cases-test
         Spec.Escrow
         Spec.Escrow.Endpoints
         Spec.SimpleEscrow
+        Spec.Tutorial.Escrow
+        Spec.Tutorial.Escrow1
+        Spec.Tutorial.Escrow2
+        Spec.Tutorial.Escrow3
+        Spec.Tutorial.Escrow4
+        Spec.Tutorial.Escrow5
+        Spec.Tutorial.Escrow6
         Spec.Future
         Spec.Game
         Spec.GameStateMachine
@@ -122,6 +131,7 @@ test-suite plutus-use-cases-test
         Spec.Rollup
         Spec.Stablecoin
         Spec.Uniswap
+        Spec.Uniswap.Endpoints
         Spec.TokenAccount
         Spec.Vesting
     default-language: Haskell2010
@@ -134,13 +144,16 @@ test-suite plutus-use-cases-test
     build-depends:
         plutus-tx -any,
         plutus-contract -any,
+        plutus-contract-certification -any,
         plutus-ledger -any,
+        plutus-ledger-api,
         plutus-ledger-constraints -any,
-        plutus-use-cases -any
+        plutus-script-utils -any,
+        plutus-use-cases -any,
+        playground-common -any
     build-depends:
         base >=4.9 && <5,
         bytestring -any,
-        cardano-crypto-class -any,
         containers -any,
         data-default -any,
         freer-extras -any,
@@ -199,7 +212,6 @@ executable plutus-use-cases-scripts
     build-depends:
         base >= 4.9 && <5,
         bytestring -any,
-        cardano-crypto-class -any,
         containers -any,
         data-default -any,
         freer-extras -any,
@@ -221,6 +233,8 @@ executable plutus-use-cases-scripts
         plutus-ledger -any,
         plutus-ledger-constraints -any,
         plutus-use-cases -any,
+        plutus-contract-certification -any,
+        plutus-script-utils -any,
         optparse-applicative -any,
         cardano-api -any
 

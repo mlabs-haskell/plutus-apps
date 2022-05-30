@@ -57,17 +57,17 @@ import Data.Text qualified as Text
 import Data.UUID (UUID)
 import GHC.Generics (C1, Constructor, D1, Generic, K1 (K1), M1 (M1), Rec0, Rep, S1, Selector, U1, conIsRecord, conName,
                      from, selName, (:*:) ((:*:)), (:+:) (L1, R1))
-import Ledger (Ada, AssetClass, CurrencySymbol, DatumHash, Interval, POSIXTime, POSIXTimeRange, PaymentPubKey,
-               PaymentPubKeyHash, PubKey, PubKeyHash, RedeemerHash, Signature, Slot, StakePubKey, StakePubKeyHash,
-               TokenName, TxId, TxOutRef, ValidatorHash, Value)
+import Ledger (Ada, AssetClass, CurrencySymbol, Interval, POSIXTime, POSIXTimeRange, PaymentPubKey, PaymentPubKeyHash,
+               PubKey, PubKeyHash, Signature, Slot, StakePubKey, StakePubKeyHash, TokenName, TxId, TxOutRef, Value)
 import Ledger.Bytes (LedgerBytes)
 import Ledger.CardanoWallet (WalletNumber)
 import Plutus.Contract.Secrets (SecretArgument (EndpointSide, UserSide))
 import Plutus.Contract.StateMachine.ThreadToken (ThreadToken)
+import Plutus.V1.Ledger.Api (DatumHash, RedeemerHash, ValidatorHash)
 import PlutusTx.AssocMap qualified
 import PlutusTx.Prelude qualified as P
 import PlutusTx.Ratio qualified as P
-import Wallet.Emulator.Wallet (Wallet, WalletId)
+import Wallet.Emulator.Wallet (Wallet, WalletId, getWalletId)
 import Wallet.Types (ContractInstanceId)
 
 import Data.OpenApi.Schema qualified as OpenApi
@@ -422,21 +422,22 @@ deriving anyclass instance ToSchema TxOutRef
 
 deriving anyclass instance ToSchema ValidatorHash
 
-deriving anyclass instance ToSchema Wallet
-
 deriving anyclass instance ToSchema WalletNumber
 
+instance ToSchema Wallet where
+  toSchema = toSchema @WalletId
 
 deriving anyclass instance ToArgument Ada
-
-deriving anyclass instance ToArgument Wallet
 
 deriving anyclass instance ToArgument WalletNumber
 
 deriving anyclass instance ToArgument Slot
 
+instance ToArgument Wallet where
+  toArgument = toArgument . getWalletId
+
 instance ToArgument WalletId where
-    toArgument = Fix . FormStringF . Just . show
+  toArgument = Fix . FormStringF . Just . show
 
 instance forall a. ToSchema a => ToSchema (SecretArgument a) where
   toSchema = toSchema @a

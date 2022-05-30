@@ -24,12 +24,13 @@ import Data.Aeson (FromJSON, ToJSON, Value)
 import Data.OpenApi qualified as OpenApi
 import Data.Proxy (Proxy (..))
 import GHC.Generics (Generic)
-import Ledger (AssetClass, Datum, DatumHash, MintingPolicy, MintingPolicyHash, Redeemer, RedeemerHash, StakeValidator,
-               StakeValidatorHash, TxId, Validator, ValidatorHash)
+import Ledger (AssetClass, TxId)
 import Ledger.Credential (Credential)
 import Ledger.Tx (ChainIndexTxOut, TxOutRef)
 import Plutus.ChainIndex.Tx (ChainIndexTx)
 import Plutus.ChainIndex.Types (Diagnostics, Tip)
+import Plutus.V1.Ledger.Api (Datum, DatumHash, MintingPolicy, MintingPolicyHash, Redeemer, RedeemerHash, StakeValidator,
+                             StakeValidatorHash, Validator, ValidatorHash)
 import Servant qualified
 import Servant.API (Description, Get, JSON, NoContent, Post, Put, ReqBody, (:<|>), (:>))
 import Servant.OpenApi (toOpenApi)
@@ -147,6 +148,7 @@ type API
     = "healthcheck" :> Description "Is the server alive?" :> Get '[JSON] NoContent
     :<|> "from-hash" :> FromHashAPI
     :<|> "tx-out" :> Description "Get a transaction output from its reference." :> ReqBody '[JSON] TxOutRef :> Post '[JSON] ChainIndexTxOut
+    :<|> "unspent-tx-out" :> Description "Get a unspent transaction output from its reference." :> ReqBody '[JSON] TxOutRef :> Post '[JSON] ChainIndexTxOut
     :<|> "tx" :> Description "Get a transaction from its id." :> ReqBody '[JSON] TxId :> Post '[JSON] ChainIndexTx
     :<|> "is-utxo" :> Description "Check if the reference is an UTxO." :> ReqBody '[JSON] TxOutRef :> Post '[JSON] IsUtxoResponse
     :<|> "utxo-at-address" :> Description "Get all UTxOs at an address." :> ReqBody '[JSON] UtxoAtAddressRequest :> Post '[JSON] UtxosResponse

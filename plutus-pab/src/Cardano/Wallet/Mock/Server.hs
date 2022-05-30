@@ -28,14 +28,12 @@ import Control.Monad.Freer.Error (throwError)
 import Control.Monad.Freer.Extras.Log (logInfo)
 import Control.Monad.IO.Class (liftIO)
 import Data.Coerce (coerce)
-import Data.Either (fromRight)
 import Data.Function ((&))
 import Data.Map.Strict qualified as Map
 import Data.Proxy (Proxy (Proxy))
 import Ledger.Ada qualified as Ada
 import Ledger.CardanoWallet qualified as CW
-import Ledger.Fee (FeeConfig)
-import Ledger.TimeSlot (SlotConfig)
+import Ledger.Params (Params (..))
 import Network.HTTP.Client (defaultManagerSettings, newManager)
 import Network.Wai.Handler.Warp qualified as Warp
 import Plutus.PAB.Arbitrary ()
@@ -51,30 +49,27 @@ app :: Trace IO WalletMsg
     -> ChainSyncHandle
     -> ClientEnv
     -> MVar Wallets
-    -> FeeConfig
-    -> SlotConfig
+    -> Params
     -> Application
-app trace txSendHandle chainSyncHandle chainIndexEnv mVarState feeCfg slotCfg =
+app trace txSendHandle chainSyncHandle chainIndexEnv mVarState params =
     serve (Proxy @(API WalletId)) $
     hoistServer
         (Proxy @(API WalletId))
-        (processWalletEffects trace txSendHandle chainSyncHandle chainIndexEnv mVarState feeCfg slotCfg) $
+        (processWalletEffects trace txSendHandle chainSyncHandle chainIndexEnv mVarState params) $
             (\funds -> createWallet (Ada.lovelaceOf <$> funds)) :<|>
-            (\w tx -> multiWallet (Wallet w) (submitTxn $ Right tx) >>= const (pure NoContent)) :<|>
+            (\w tx -> multiWallet (Wallet Nothing w) (submitTxn tx) >>= const (pure NoContent)) :<|>
             (getWalletInfo >=> maybe (throwError err404) pure ) :<|>
-            (\w -> fmap (fmap (fromRight (error "Cardano.Wallet.Mock.Server: Expecting a mock tx, not an Alonzo tx when submitting it.")))
-                 . multiWallet (Wallet w) . balanceTx) :<|>
-            (\w -> multiWallet (Wallet w) totalFunds) :<|>
-            (\w tx -> fmap (fromRight (error "Cardano.Wallet.Mock.Server: Expecting a mock tx, not an Alonzo tx when adding a signature."))
-                    $ multiWallet (Wallet w) (walletAddSignature $ Right tx))
+            (\w -> multiWallet (Wallet Nothing w) . balanceTx) :<|>
+            (\w -> multiWallet (Wallet Nothing w) totalFunds) :<|>
+            (\w tx -> multiWallet (Wallet Nothing w) (walletAddSignature tx))
 
-main :: Trace IO WalletMsg -> LocalWalletSettings -> FeeConfig -> FilePath -> SlotConfig -> ChainIndexUrl -> Availability -> IO ()
-main trace LocalWalletSettings { baseUrl } feeCfg serverSocket slotCfg (ChainIndexUrl chainUrl) availability = LM.runLogEffects trace $ do
+main :: Trace IO WalletMsg -> LocalWalletSettings -> FilePath -> Params -> ChainIndexUrl -> Availability -> IO ()
+main trace LocalWalletSettings { baseUrl } serverSocket params (ChainIndexUrl chainUrl) availability = LM.runLogEffects trace $ do
     chainIndexEnv <- buildEnv chainUrl defaultManagerSettings
-    let knownWallets = Map.fromList $ zip Wallet.knownWallets (Wallet.fromMockWallet <$> CW.knownMockWallets)
+    let knownWallets = Map.fromList $ zip (Wallet.getWalletId <$> Wallet.knownWallets) (Wallet.fromMockWallet <$> CW.knownMockWallets)
     mVarState <- liftIO $ newMVar knownWallets
     txSendHandle    <- liftIO $ MockClient.runTxSender serverSocket
-    chainSyncHandle <- Left <$> (liftIO $ MockClient.runChainSync' serverSocket slotCfg)
+    chainSyncHandle <- Left <$> (liftIO $ MockClient.runChainSync' serverSocket $ pSlotConfig params)
     logInfo $ StartingWallet (Port servicePort)
     liftIO $ Warp.runSettings warpSettings
            $ app trace
@@ -82,8 +77,7 @@ main trace LocalWalletSettings { baseUrl } feeCfg serverSocket slotCfg (ChainInd
                  chainSyncHandle
                  chainIndexEnv
                  mVarState
-                 feeCfg
-                 slotCfg
+                 params
     where
         servicePort = baseUrlPort (coerce baseUrl)
         warpSettings = Warp.defaultSettings & Warp.setPort servicePort & Warp.setBeforeMainLoop (available availability)

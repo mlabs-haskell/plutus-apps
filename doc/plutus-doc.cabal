@@ -31,7 +31,7 @@ common lang
                         ImportQualifiedPost
     ghc-options: -Wall -Wnoncanonical-monad-instances
                  -Wincomplete-uni-patterns -Wincomplete-record-updates
-                 -Wredundant-constraints -Widentities
+                 -Wredundant-constraints -Widentities -Wmissing-import-lists
                  -- See Plutus Tx readme
                  -fobject-code -fno-ignore-interface-pragmas -fno-omit-interface-pragmas
 
@@ -56,6 +56,13 @@ executable doc-doctests
       HandlingBlockchainEvents
       HelloWorldApp
       WriteScriptsTo
+      Escrow
+      Escrow2
+      Escrow3
+      Escrow4
+      Escrow5
+      Escrow6
+      EscrowImpl
     build-depends:
       base >=4.9 && <5,
       template-haskell >=2.13.0.0,
@@ -68,6 +75,7 @@ executable doc-doctests
       plutus-ledger -any,
       plutus-ledger-api -any,
       plutus-ledger-constraints -any,
+      plutus-script-utils -any,
       plutus-contract -any,
       playground-common -any,
       plutus-use-cases -any,
@@ -80,6 +88,8 @@ executable doc-doctests
       random -any,
       text -any,
       aeson -any,
+      tasty -any,
+      tasty-quickcheck -any
 
     if !(impl(ghcjs) || os(ghcjs))
         build-depends: plutus-tx-plugin -any

@@ -12,28 +12,31 @@ import Control.Lens (over)
 import Options.Applicative (CommandFields, Mod, Parser, ParserInfo, argument, auto, command, flag, fullDesc, header,
                             help, helper, hsubparser, info, long, metavar, option, progDesc, short, str, value, (<**>))
 
-import Cardano.Api (NetworkId (..), NetworkMagic (..))
-import Cardano.BM.Data.Severity
+import Cardano.Api (NetworkId (Testnet), NetworkMagic (NetworkMagic))
+import Cardano.BM.Data.Severity (Severity (Debug))
 import GHC.Word (Word32)
+import Numeric.Natural (Natural)
 import Plutus.ChainIndex.Config (ChainIndexConfig)
 import Plutus.ChainIndex.Config qualified as Config
 
 data CLIConfigOverrides =
   CLIConfigOverrides
-    { ccSocketPath :: Maybe String
-    , ccDbPath     :: Maybe String
-    , ccPort       :: Maybe Int
-    , ccNetworkId  :: Maybe Word32
+    { ccSocketPath                 :: Maybe String
+    , ccDbPath                     :: Maybe String
+    , ccPort                       :: Maybe Int
+    , ccNetworkId                  :: Maybe Word32
+    , ccAppendTransactionQueueSize :: Maybe Natural
     }
     deriving (Eq, Ord, Show)
 
 -- | Apply the CLI soverrides to the 'ChainIndexConfig'
 applyOverrides :: CLIConfigOverrides -> ChainIndexConfig -> ChainIndexConfig
-applyOverrides CLIConfigOverrides{ccSocketPath, ccDbPath, ccPort, ccNetworkId} =
+applyOverrides CLIConfigOverrides{ccSocketPath, ccDbPath, ccPort, ccNetworkId, ccAppendTransactionQueueSize} =
   over Config.socketPath (maybe id const ccSocketPath)
   . over Config.dbPath (maybe id const ccDbPath)
   . over Config.port (maybe id const ccPort)
   . over Config.networkId (maybe id (const . Testnet . NetworkMagic) ccNetworkId)
+  . over Config.appendTransactionQueueSize (maybe id const ccAppendTransactionQueueSize)
 
 -- | Configuration
 data Command =
@@ -65,7 +68,7 @@ optParser =
 
 cliConfigOverridesParser :: Parser CLIConfigOverrides
 cliConfigOverridesParser =
-  CLIConfigOverrides <$> socketPathParser <*> dbPathParser <*> portParser <*> networkIDParser where
+  CLIConfigOverrides <$> socketPathParser <*> dbPathParser <*> portParser <*> networkIDParser <*> appendTransactionQueueSizeParser where
     socketPathParser =
       option (Just <$> str) (long "socket-path" <> value Nothing <> help "Node socket path")
     dbPathParser =
@@ -74,6 +77,8 @@ cliConfigOverridesParser =
       option (Just <$> auto) (long "port" <> value Nothing <> help "Port")
     networkIDParser =
       option (Just <$> auto) (long "network-id" <> value Nothing <> help "Network ID")
+    appendTransactionQueueSizeParser =
+      option (Just <$> auto) (long "append-transaction-queue-size" <> value Nothing <> help "Append transaction queue size")
 
 loggingConfigParser :: Parser (Maybe FilePath)
 loggingConfigParser =

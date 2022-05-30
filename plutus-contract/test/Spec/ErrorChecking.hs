@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds          #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE FlexibleContexts   #-}
 {-# LANGUAGE FlexibleInstances  #-}
 {-# LANGUAGE GADTs              #-}
@@ -10,14 +11,16 @@
 {-# OPTIONS_GHC -fno-warn-name-shadowing #-}
 module Spec.ErrorChecking where
 
+import Control.Lens hiding (elements)
 import Control.Monad
+import Control.Monad.Freer.Extras.Log
+import Data.Data
 import Data.Row
 import Test.Tasty
 
 import Ledger.Ada qualified as Ada
 import Ledger.Address
 import Ledger.Constraints
-import Ledger.Contexts (ScriptContext (..))
 import Ledger.Scripts
 import Ledger.Tx
 import Ledger.Typed.Scripts qualified as Scripts hiding (validatorHash)
@@ -25,7 +28,9 @@ import Ledger.Typed.Scripts.Validators hiding (validatorHash)
 import Plutus.Contract as Contract
 import Plutus.Contract.Test hiding (not)
 import Plutus.Contract.Test.ContractModel
+import Plutus.Script.Utils.V1.Scripts (validatorHash)
 import Plutus.Trace.Emulator as Trace
+import Plutus.V1.Ledger.Contexts (ScriptContext (..))
 import PlutusTx qualified
 import PlutusTx.ErrorCodes
 import PlutusTx.IsData.Class
@@ -36,6 +41,8 @@ import Prelude qualified as Haskell
 import Test.QuickCheck hiding (Success)
 import Test.Tasty.HUnit
 import Test.Tasty.QuickCheck hiding (Success)
+
+{- HLINT ignore "Use camelCase" -}
 
 tests :: TestTree
 tests = testGroup "error checking"
@@ -48,27 +55,30 @@ tests = testGroup "error checking"
 
 -- | Normal failures should be allowed
 prop_FailFalse :: Property
-prop_FailFalse = checkErrorWhitelist defaultWhitelist (actionsFromList [FailFalse])
+prop_FailFalse = checkErrorWhitelistWithOptions checkOptions defaultCoverageOptions defaultWhitelist (actionsFromList [FailFalse])
 
 -- | Head Nil failure should not be allowed
 prop_FailHeadNil :: Property
-prop_FailHeadNil = checkErrorWhitelist defaultWhitelist (actionsFromList [FailHeadNil])
+prop_FailHeadNil = checkErrorWhitelistWithOptions checkOptions defaultCoverageOptions defaultWhitelist (actionsFromList [FailHeadNil])
 
 -- | Division by zero failure should not be allowed
 prop_DivZero :: Property
-prop_DivZero = checkErrorWhitelist defaultWhitelist (actionsFromList [DivZero])
+prop_DivZero = checkErrorWhitelistWithOptions checkOptions defaultCoverageOptions defaultWhitelist (actionsFromList [DivZero])
 
 -- | Division by zero failure should not be allowed (tracing before the failure).
 prop_DivZero_t :: Property
-prop_DivZero_t = checkErrorWhitelist defaultWhitelist (actionsFromList [DivZero_t])
+prop_DivZero_t = checkErrorWhitelistWithOptions checkOptions defaultCoverageOptions defaultWhitelist (actionsFromList [DivZero_t])
 
 -- | Successful validation should be allowed
 prop_Success :: Property
-prop_Success = checkErrorWhitelist defaultWhitelist (actionsFromList [Success])
+prop_Success = checkErrorWhitelistWithOptions checkOptions defaultCoverageOptions defaultWhitelist (actionsFromList [Success])
+
+checkOptions :: CheckOptions
+checkOptions = set minLogLevel Critical defaultCheckOptionsContractModel
 
 -- | This QuickCheck model only provides an interface to the validators used in this
 -- test that are convenient for testing them in isolation.
-data DummyModel = DummyModel deriving Haskell.Show
+data DummyModel = DummyModel deriving (Haskell.Show, Data)
 
 deriving instance Haskell.Eq (ContractInstanceKey DummyModel w schema err param)
 deriving instance Haskell.Show (ContractInstanceKey DummyModel w schema err param)
@@ -82,7 +92,7 @@ instance ContractModel DummyModel where
                          | DivZero
                          | DivZero_t    -- Trace before dividing by zero
                          | Success
-                         deriving (Haskell.Eq, Haskell.Show)
+                         deriving (Haskell.Eq, Haskell.Show, Data)
 
   perform handle _ _ cmd = void $ case cmd of
     FailFalse -> do
@@ -164,7 +174,7 @@ v_failFalse = Scripts.mkTypedValidator @Validators
     $$(PlutusTx.compile [|| failFalse ||])
     $$(PlutusTx.compile [|| wrap ||])
     where
-        wrap = Scripts.wrapValidator
+        wrap = Scripts.mkUntypedValidator
 
 -- | Always fail due to a partial function
 {-# INLINEABLE failHeadNil #-}
@@ -176,7 +186,7 @@ v_failHeadNil = Scripts.mkTypedValidator @Validators
     $$(PlutusTx.compile [|| failHeadNil ||])
     $$(PlutusTx.compile [|| wrap ||])
     where
-        wrap = Scripts.wrapValidator
+        wrap = Scripts.mkUntypedValidator
 
 -- | Always fail with a division by zero error
 {-# INLINEABLE divZero #-}
@@ -188,7 +198,7 @@ v_divZero = Scripts.mkTypedValidator @Validators
     $$(PlutusTx.compile [|| divZero ||])
     $$(PlutusTx.compile [|| wrap ||])
     where
-        wrap = Scripts.wrapValidator
+        wrap = Scripts.mkUntypedValidator
 
 {-# INLINEABLE divZero_t #-}
 divZero_t :: () -> Integer -> ScriptContext -> Bool
@@ -201,7 +211,7 @@ v_divZero_t = Scripts.mkTypedValidator @Validators
     $$(PlutusTx.compile [|| divZero_t ||])
     $$(PlutusTx.compile [|| wrap ||])
     where
-        wrap = Scripts.wrapValidator
+        wrap = Scripts.mkUntypedValidator
 
 -- | Always succeed
 {-# INLINEABLE success #-}
@@ -213,4 +223,4 @@ v_success = Scripts.mkTypedValidator @Validators
     $$(PlutusTx.compile [|| success ||])
     $$(PlutusTx.compile [|| wrap ||])
     where
-        wrap = Scripts.wrapValidator
+        wrap = Scripts.mkUntypedValidator

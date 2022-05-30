@@ -31,6 +31,7 @@ module Plutus.Contract.Effects( -- TODO: Move to Requests.Internal
     _RedeemerFromHash,
     _TxOutFromRef,
     _TxFromTxId,
+    _UnspentTxOutFromRef,
     _UtxoSetMembership,
     _UtxoSetAtAddress,
     _UtxoSetWithCurrency,
@@ -62,6 +63,7 @@ module Plutus.Contract.Effects( -- TODO: Move to Requests.Internal
     _MintingPolicyHashResponse,
     _RedeemerHashResponse,
     _TxOutRefResponse,
+    _UnspentTxOutResponse,
     _TxIdResponse,
     _UtxoSetMembershipResponse,
     _UtxoSetAtResponse,
@@ -85,21 +87,24 @@ import Data.Aeson (FromJSON, ToJSON)
 import Data.Aeson qualified as JSON
 import Data.List.NonEmpty (NonEmpty)
 import Data.OpenApi.Schema qualified as OpenApi
+import Data.String (fromString)
 import GHC.Generics (Generic)
-import Ledger (Address, AssetClass, Datum, DatumHash, MintingPolicy, MintingPolicyHash, PaymentPubKeyHash, Redeemer,
-               RedeemerHash, StakeValidator, StakeValidatorHash, TxId, TxOutRef, ValidatorHash)
+import Ledger (PaymentPubKeyHash)
 import Ledger.Constraints.OffChain (UnbalancedTx)
 import Ledger.Credential (Credential)
 import Ledger.Scripts (Validator)
 import Ledger.Slot (Slot, SlotRange)
 import Ledger.Time (POSIXTime, POSIXTimeRange)
 import Ledger.TimeSlot (SlotConversionError)
-import Ledger.Tx (CardanoTx, ChainIndexTxOut, getCardanoTxId)
+import Ledger.Tx (CardanoTx, ChainIndexTxOut, getCardanoTxId, onCardanoTx)
 import Plutus.ChainIndex (Page (pageItems), PageQuery)
 import Plutus.ChainIndex.Api (IsUtxoResponse (IsUtxoResponse), TxosResponse (TxosResponse),
                               UtxosResponse (UtxosResponse))
 import Plutus.ChainIndex.Tx (ChainIndexTx (_citxTxId))
 import Plutus.ChainIndex.Types (Tip, TxOutStatus, TxStatus)
+import Plutus.V1.Ledger.Api (Address, Datum, DatumHash, MintingPolicy, MintingPolicyHash, Redeemer, RedeemerHash,
+                             StakeValidator, StakeValidatorHash, TxId, TxOutRef, ValidatorHash)
+import Plutus.V1.Ledger.Value (AssetClass)
 import Prettyprinter (Pretty (pretty), hsep, indent, viaShow, vsep, (<+>))
 import Wallet.API (WalletAPIError)
 import Wallet.Types (ContractInstanceId, EndpointDescription, EndpointValue)
@@ -139,7 +144,7 @@ instance Pretty PABReq where
     OwnPaymentPublicKeyHashReq              -> "Own public key"
     ChainIndexQueryReq q                    -> "Chain index query:" <+> pretty q
     BalanceTxReq utx                        -> "Balance tx:" <+> pretty utx
-    WriteBalancedTxReq tx                   -> "Write balanced tx:" <+> pretty tx
+    WriteBalancedTxReq tx                   -> "Write balanced tx:" <+> onCardanoTx pretty (fromString . show) tx
     ExposeEndpointReq ep                    -> "Expose endpoint:" <+> pretty ep
     PosixTimeRangeToContainedSlotRangeReq r -> "Posix time range to contained slot range:" <+> pretty r
     YieldUnbalancedTxReq utx                -> "Yield unbalanced tx:" <+> pretty utx
@@ -214,11 +219,12 @@ chainIndexMatches q r = case (q, r) of
     (RedeemerFromHash{}, RedeemerHashResponse{})             -> True
     (TxOutFromRef{}, TxOutRefResponse{})                     -> True
     (TxFromTxId{}, TxIdResponse{})                           -> True
+    (UnspentTxOutFromRef{}, UnspentTxOutResponse{})          -> True
     (UtxoSetMembership{}, UtxoSetMembershipResponse{})       -> True
     (UtxoSetAtAddress{}, UtxoSetAtResponse{})                -> True
     (UtxoSetWithCurrency{}, UtxoSetWithCurrencyResponse{})   -> True
-    (TxsFromTxIds{}, TxIdsResponse{})                        -> True
     (TxoSetAtAddress{}, TxoSetAtResponse{})                  -> True
+    (TxsFromTxIds{}, TxIdsResponse{})                        -> True
     (GetTip{}, GetTipResponse{})                             -> True
     _                                                        -> False
 
@@ -232,6 +238,7 @@ data ChainIndexQuery =
   | StakeValidatorFromHash StakeValidatorHash
   | RedeemerFromHash RedeemerHash
   | TxOutFromRef TxOutRef
+  | UnspentTxOutFromRef TxOutRef
   | TxFromTxId TxId
   | UtxoSetMembership TxOutRef
   | UtxoSetAtAddress (PageQuery TxOutRef) Credential
@@ -250,6 +257,7 @@ instance Pretty ChainIndexQuery where
         StakeValidatorFromHash h   -> "requesting stake validator from hash" <+> pretty h
         RedeemerFromHash h         -> "requesting redeemer from hash" <+> pretty h
         TxOutFromRef r             -> "requesting utxo from utxo reference" <+> pretty r
+        UnspentTxOutFromRef r      -> "requesting utxo from utxo reference" <+> pretty r
         TxFromTxId i               -> "requesting chain index tx from id" <+> pretty i
         UtxoSetMembership txOutRef -> "whether tx output is part of the utxo set" <+> pretty txOutRef
         UtxoSetAtAddress _ c       -> "requesting utxos located at addresses with the credential" <+> pretty c
@@ -267,6 +275,7 @@ data ChainIndexResponse =
   | MintingPolicyHashResponse (Maybe MintingPolicy)
   | StakeValidatorHashResponse (Maybe StakeValidator)
   | TxOutRefResponse (Maybe ChainIndexTxOut)
+  | UnspentTxOutResponse (Maybe ChainIndexTxOut)
   | RedeemerHashResponse (Maybe Redeemer)
   | TxIdResponse (Maybe ChainIndexTx)
   | UtxoSetMembershipResponse IsUtxoResponse
@@ -286,6 +295,7 @@ instance Pretty ChainIndexResponse where
         StakeValidatorHashResponse m -> "Chain index stake validator from hash response:" <+> pretty m
         RedeemerHashResponse r -> "Chain index redeemer from hash response:" <+> pretty r
         TxOutRefResponse t -> "Chain index utxo from utxo ref response:" <+> pretty t
+        UnspentTxOutResponse t -> "Chain index utxo from utxo ref response:" <+> pretty t
         TxIdResponse t -> "Chain index tx from tx id response:" <+> pretty (_citxTxId <$> t)
         UtxoSetMembershipResponse (IsUtxoResponse tip b) ->
                 "Chain index response whether tx output ref is part of the UTxO set:"
@@ -342,7 +352,7 @@ data WriteBalancedTxResponse =
 instance Pretty WriteBalancedTxResponse where
   pretty = \case
     WriteBalancedTxFailed e   -> "WriteBalancedTxFailed:" <+> pretty e
-    WriteBalancedTxSuccess tx -> "WriteBalancedTxFailed:" <+> pretty (getCardanoTxId tx)
+    WriteBalancedTxSuccess tx -> "WriteBalancedTxSuccess:" <+> pretty (getCardanoTxId tx)
 
 writeBalancedTxResponse :: Iso' WriteBalancedTxResponse (Either WalletAPIError CardanoTx)
 writeBalancedTxResponse = iso f g where

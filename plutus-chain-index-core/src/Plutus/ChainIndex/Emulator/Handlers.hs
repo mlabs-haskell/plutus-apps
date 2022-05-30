@@ -21,6 +21,7 @@ module Plutus.ChainIndex.Emulator.Handlers(
     ) where
 
 import Control.Lens (at, ix, makeLenses, over, preview, set, to, view, (&))
+import Control.Monad (foldM)
 import Control.Monad.Freer (Eff, Member, type (~>))
 import Control.Monad.Freer.Error (Error, throwError)
 import Control.Monad.Freer.Extras.Log (LogMsg, logDebug, logError, logWarn)
@@ -30,10 +31,8 @@ import Data.Maybe (catMaybes, fromMaybe)
 import Data.Semigroup.Generic (GenericSemigroupMonoid (..))
 import Data.Set qualified as Set
 import GHC.Generics (Generic)
-import Ledger (Address (addressCredential), ChainIndexTxOut (..), MintingPolicy (MintingPolicy),
-               MintingPolicyHash (MintingPolicyHash), StakeValidator (StakeValidator),
-               StakeValidatorHash (StakeValidatorHash), TxId, TxOut (txOutAddress), TxOutRef (..),
-               Validator (Validator), ValidatorHash (ValidatorHash), txOutDatumHash, txOutValue)
+import Ledger (Address (addressCredential), ChainIndexTxOut (..), TxId, TxOut (txOutAddress), TxOutRef (..),
+               txOutDatumHash, txOutValue)
 import Ledger.Scripts (ScriptHash (ScriptHash))
 import Plutus.ChainIndex.Api (IsUtxoResponse (IsUtxoResponse), TxosResponse (TxosResponse),
                               UtxosResponse (UtxosResponse))
@@ -49,7 +48,10 @@ import Plutus.ChainIndex.Types (ChainSyncBlock (..), Diagnostics (..), Point (Po
                                 TxProcessOption (..), TxUtxoBalance (..))
 import Plutus.ChainIndex.UtxoState (InsertUtxoSuccess (..), RollbackResult (..), UtxoIndex, tip, utxoState)
 import Plutus.ChainIndex.UtxoState qualified as UtxoState
-import Plutus.V1.Ledger.Api (Credential (PubKeyCredential, ScriptCredential))
+import Plutus.V1.Ledger.Api (Credential (PubKeyCredential, ScriptCredential), MintingPolicy (MintingPolicy),
+                             MintingPolicyHash (MintingPolicyHash), StakeValidator (StakeValidator),
+                             StakeValidatorHash (StakeValidatorHash), Validator (Validator),
+                             ValidatorHash (ValidatorHash))
 
 data ChainIndexEmulatorState =
     ChainIndexEmulatorState
@@ -119,6 +121,7 @@ handleQuery = \case
       gets (fmap (fmap MintingPolicy) . view $ diskState . scriptMap . at (ScriptHash h))
     StakeValidatorFromHash (StakeValidatorHash h) ->
       gets (fmap (fmap StakeValidator) . view $ diskState . scriptMap . at (ScriptHash h))
+    UnspentTxOutFromRef ref -> getTxOutFromRef ref
     TxOutFromRef ref -> getTxOutFromRef ref
     RedeemerFromHash h -> gets (view $ diskState . redeemerMap . at h)
     TxFromTxId i -> getTxFromTxId i
@@ -165,6 +168,31 @@ handleQuery = \case
     GetTip ->
         gets (tip . utxoState . view utxoIndex)
 
+appendBlocks ::
+    forall effs.
+    ( Member (State ChainIndexEmulatorState) effs
+    , Member (LogMsg ChainIndexLog) effs
+    )
+    => [ChainSyncBlock] -> Eff effs ()
+appendBlocks [] = pure ()
+appendBlocks blocks = do
+    let
+        processBlock (utxoIndexState, txs) (Block tip_ transactions) = do
+            case UtxoState.insert (TxUtxoBalance.fromBlock tip_ (map fst transactions)) utxoIndexState of
+                Left err -> do
+                    let reason = InsertionFailed err
+                    logError $ Err reason
+                    return (utxoIndexState, txs)
+                Right InsertUtxoSuccess{newIndex, insertPosition} -> do
+                    logDebug $ InsertionSuccess tip_ insertPosition
+                    return (newIndex, transactions ++ txs)
+    oldState <- get @ChainIndexEmulatorState
+    (newIndex, transactions) <- foldM processBlock (view utxoIndex oldState, []) blocks
+    put $ oldState
+            & set utxoIndex newIndex
+            & over diskState
+                (mappend $ foldMap (\(tx, opt) -> if tpoStoreTx opt then DiskState.fromTx tx else mempty) transactions)
+
 handleControl ::
     forall effs.
     ( Member (State ChainIndexEmulatorState) effs
@@ -174,19 +202,7 @@ handleControl ::
     => ChainIndexControlEffect
     ~> Eff effs
 handleControl = \case
-    AppendBlock (Block tip_ transactions) -> do
-        oldState <- get @ChainIndexEmulatorState
-        case UtxoState.insert (TxUtxoBalance.fromBlock tip_ (map fst transactions)) (view utxoIndex oldState) of
-            Left err -> do
-                let reason = InsertionFailed err
-                logError $ Err reason
-                throwError reason
-            Right InsertUtxoSuccess{newIndex, insertPosition} -> do
-                put $ oldState
-                        & set utxoIndex newIndex
-                        & over diskState
-                            (mappend $ foldMap (\(tx, opt) -> if tpoStoreTx opt then DiskState.fromTx tx else mempty) transactions)
-                logDebug $ InsertionSuccess tip_ insertPosition
+    AppendBlocks blocks -> appendBlocks blocks
     Rollback tip_ -> do
         oldState <- get @ChainIndexEmulatorState
         case TxUtxoBalance.rollback tip_ (view utxoIndex oldState) of

@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds           #-}
+{-# LANGUAGE DeriveDataTypeable  #-}
 {-# LANGUAGE FlexibleInstances   #-}
 {-# LANGUAGE GADTs               #-}
 {-# LANGUAGE NamedFieldPuns      #-}
@@ -20,6 +21,7 @@ import Control.Monad.Freer (run)
 import Control.Monad.Freer.Extras.Log (LogLevel (..))
 import Data.ByteString.Lazy (ByteString)
 import Data.ByteString.Lazy qualified as BSL
+import Data.Data
 import Data.Default (Default (..))
 import Data.Foldable
 import Data.Map (Map)
@@ -58,7 +60,7 @@ data CrowdfundingModel = CrowdfundingModel { _contributions       :: Map Wallet 
                                            , _ownerOnline         :: Bool
                                            , _collectDeadlineSlot :: Slot
                                            , _endSlot             :: Slot
-                                           } deriving (Show)
+                                           } deriving (Show, Data)
 
 makeLenses ''CrowdfundingModel
 
@@ -76,7 +78,7 @@ tests = testGroup "crowdfunding"
             slotCfg <- Trace.getSlotConfig
             void (Trace.activateContractWallet w1 $ theContract $ TimeSlot.scSlotZeroTime slotCfg)
 
-    , checkPredicateOptions defaultCheckOptions "make contribution"
+    , checkPredicate "make contribution"
         (walletFundsChange w1 (Ada.adaValueOf (-10)))
         $ let contribution = Ada.adaValueOf 10
           in makeContribution w1 contribution >> void Trace.nextSlot
@@ -178,16 +180,13 @@ renderEmulatorLog trace =
 params :: Campaign
 params = theCampaign (TimeSlot.scSlotZeroTime def)
 
-deriving instance Eq (Action CrowdfundingModel)
-deriving instance Show (Action CrowdfundingModel)
-
 deriving instance Eq (ContractInstanceKey CrowdfundingModel w schema err params)
 deriving instance Show (ContractInstanceKey CrowdfundingModel w schema err params)
 
 instance ContractModel CrowdfundingModel where
   data Action CrowdfundingModel = CContribute Wallet Value
-                                | CWaitUntil Slot
                                 | CStart
+                                deriving (Eq, Show, Data)
 
   data ContractInstanceKey CrowdfundingModel w schema err params where
     ContributorKey :: Wallet -> ContractInstanceKey CrowdfundingModel () CrowdfundingSchema ContractError ()
@@ -210,12 +209,10 @@ instance ContractModel CrowdfundingModel where
   instanceContract _ ContributorKey{} _ = crowdfunding params
 
   perform h _ s a = case a of
-    CWaitUntil slot -> void $ Trace.waitUntilSlot slot
     CContribute w v -> Trace.callEndpoint @"contribute" (h $ ContributorKey w) Contribution{contribValue=v}
     CStart          -> Trace.callEndpoint @"schedule collection" (h $ OwnerKey $ s ^. contractState . ownerWallet) ()
 
   nextState a = case a of
-    CWaitUntil slot -> waitUntil slot
     CContribute w v -> do
       withdraw w v
       contributions $~ Map.insert w v
@@ -245,7 +242,6 @@ instance ContractModel CrowdfundingModel where
 
   -- The 'precondition' says when a particular command is allowed.
   precondition s cmd = case cmd of
-    CWaitUntil slot -> slot > s ^. currentSlot
     -- In order to contribute, we need to satisfy the constraint where each tx
     -- output must have at least N Ada.
     CContribute w v -> w `notElem` Map.keys (s ^. contractState . contributions)
@@ -256,9 +252,8 @@ instance ContractModel CrowdfundingModel where
 
   -- To generate a random test case we need to know how to generate a random
   -- command given the current model state.
+
   arbitraryAction s = oneof $
-    [ CWaitUntil . step <$> choose (1, 100 :: Integer) ]
-    ++
     [ CContribute <$> QC.elements availableWallets <*> (Ada.lovelaceValueOf . abs <$> choose (2000000, 100000000))
     | Prelude.not . null $ availableWallets
     , s ^. currentSlot < s ^. contractState . endSlot ]
@@ -267,12 +262,16 @@ instance ContractModel CrowdfundingModel where
     | Prelude.not (s ^. contractState . ownerOnline || s ^. contractState . ownerContractDone) ]
     where
       availableWallets = [ w | w <- contributorWallets, w `notElem` Map.keys (s ^. contractState . contributions) ]
-      slot = s ^. currentSlot
-      step n = slot + fromIntegral n
 
-  shrinkAction _ a = case a of
-    CWaitUntil s -> CWaitUntil . fromIntegral <$> (shrink . toInteger $ s)
-    _            -> []
+  waitProbability s
+    | Prelude.not . null $ availableWallets
+    , s ^. currentSlot < s ^. contractState . endSlot = 0.05
+    | Prelude.not (s ^. contractState . ownerOnline || s ^. contractState . ownerContractDone) = 0.05
+    | otherwise = 1
+    where
+      availableWallets = [ w | w <- contributorWallets, w `notElem` Map.keys (s ^. contractState . contributions) ]
+
+  shrinkAction _ _ = []
 
   monitoring _ _ = id
 

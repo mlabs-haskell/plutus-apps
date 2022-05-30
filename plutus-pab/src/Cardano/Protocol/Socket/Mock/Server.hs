@@ -5,7 +5,6 @@
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE NamedFieldPuns    #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TypeApplications  #-}
 {-# LANGUAGE TypeFamilies      #-}
 
 module Cardano.Protocol.Socket.Mock.Server where
@@ -50,8 +49,7 @@ import Cardano.Protocol.Socket.Type
 
 import Cardano.Chain (MockNodeServerChainState (..), addTxToPool, chainNewestFirst, channel, currentSlot, getChannel,
                       getTip, handleControlChain, tip, txPool)
-import Ledger (Block, Slot (..), Tx (..))
-import Ledger.TimeSlot (SlotConfig)
+import Ledger (Block, CardanoTx (..), Params, Slot (..), Tx (..))
 import Wallet.Emulator.Chain qualified as Chain
 
 data CommandChannel = CommandChannel
@@ -147,16 +145,16 @@ handleCommand ::
  => Trace IO PABServerLogMsg
  -> CommandChannel
  -> MVar MockNodeServerChainState
- -> SlotConfig
+ -> Params
  -> m ()
-handleCommand trace CommandChannel {ccCommand, ccResponse} mvChainState slotCfg =
+handleCommand trace CommandChannel {ccCommand, ccResponse} mvChainState params =
     liftIO (atomically $ readTQueue ccCommand) >>= \case
         AddTx tx     -> do
-            liftIO $ modifyMVar_ mvChainState (pure . over txPool (tx :))
+            liftIO $ modifyMVar_ mvChainState (pure . over txPool (EmulatorTx tx :))
         ModifySlot f -> liftIO $ do
             state <- liftIO $ takeMVar mvChainState
             (s, nextState') <- liftIO $ Chain.modifySlot f
-                  & interpret (handleControlChain slotCfg)
+                  & interpret (handleControlChain params)
                   & interpret (LM.handleLogMsgTraceMap ProcessingChainEvent trace)
                   & runState state
                   & runM
@@ -166,7 +164,7 @@ handleCommand trace CommandChannel {ccCommand, ccResponse} mvChainState slotCfg 
         ProcessBlock -> liftIO $ do
             state <- liftIO $ takeMVar mvChainState
             (block, nextState') <- liftIO $ Chain.processBlock
-                  & interpret (handleControlChain slotCfg)
+                  & interpret (handleControlChain params)
                   & interpret (LM.handleLogMsgTraceMap ProcessingChainEvent trace)
                   & runState state
                   & runM
@@ -182,14 +180,14 @@ runServerNode ::
  -> FilePath
  -> Integer
  -> MockNodeServerChainState
- -> SlotConfig
+ -> Params
  -> m ServerHandler
-runServerNode trace shSocketPath k initialState slotCfg = liftIO $ do
+runServerNode trace shSocketPath k initialState params = liftIO $ do
     serverState      <- newMVar initialState
     shCommandChannel <- CommandChannel <$> newTQueueIO <*> newTQueueIO
     globalChannel    <- getChannel serverState
     void $ forkIO . void    $ protocolLoop        shSocketPath     serverState
-    void $ forkIO . forever $ handleCommand trace shCommandChannel serverState slotCfg
+    void $ forkIO . forever $ handleCommand trace shCommandChannel serverState params
     void                    $ pruneChain k globalChannel
     pure $ ServerHandler { shSocketPath, shCommandChannel }
 
@@ -414,6 +412,7 @@ nodeToClientProtocols internalState =
     { localChainSyncProtocol = chainSync internalState
     , localTxSubmissionProtocol = txSubmission internalState
     , localStateQueryProtocol = doNothingResponderProtocol
+    , localTxMonitorProtocol = doNothingResponderProtocol
     }
 
 chainSync
@@ -478,7 +477,7 @@ txSubmissionServer state = txSubmissionState
         TxSubmission.LocalTxSubmissionServer {
           TxSubmission.recvMsgSubmitTx =
             \tx -> do
-                modifyMVar_ state (pure . over txPool (addTxToPool tx))
+                modifyMVar_ state (pure . over txPool (addTxToPool (EmulatorTx tx)))
                 return (TxSubmission.SubmitSuccess, txSubmissionState)
         , TxSubmission.recvMsgDone     = ()
         }

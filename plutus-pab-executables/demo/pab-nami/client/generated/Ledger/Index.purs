@@ -72,12 +72,14 @@ _MintingPolicyScript = prism' MintingPolicyScript case _ of
 
 --------------------------------------------------------------------------------
 
-newtype ScriptValidationEvent = ScriptValidationEvent
-  { sveScript :: String
-  , sveResult :: Either ScriptError (Tuple RawJson (Array String))
-  , sveRedeemer :: String
-  , sveType :: ScriptType
-  }
+data ScriptValidationEvent
+  = ScriptValidationEvent
+      { sveScript :: String
+      , sveResult :: Either ScriptError (Tuple RawJson (Array String))
+      , sveRedeemer :: String
+      , sveType :: ScriptType
+      }
+  | ScriptValidationResultOnlyEvent { sveResult :: Either ScriptError (Tuple RawJson (Array String)) }
 
 derive instance Eq ScriptValidationEvent
 
@@ -85,33 +87,47 @@ instance Show ScriptValidationEvent where
   show a = genericShow a
 
 instance EncodeJson ScriptValidationEvent where
-  encodeJson = defer \_ -> E.encode $ unwrap >$<
-    ( E.record
-        { sveScript: E.value :: _ String
-        , sveResult: (E.either E.value (E.tuple (E.value >/\< E.value))) :: _ (Either ScriptError (Tuple RawJson (Array String)))
-        , sveRedeemer: E.value :: _ String
-        , sveType: E.value :: _ ScriptType
-        }
-    )
+  encodeJson = defer \_ -> case _ of
+    ScriptValidationEvent { sveScript, sveResult, sveRedeemer, sveType } -> encodeJson
+      { tag: "ScriptValidationEvent"
+      , sveScript: flip E.encode sveScript E.value
+      , sveResult: flip E.encode sveResult (E.either E.value (E.tuple (E.value >/\< E.value)))
+      , sveRedeemer: flip E.encode sveRedeemer E.value
+      , sveType: flip E.encode sveType E.value
+      }
+    ScriptValidationResultOnlyEvent { sveResult } -> encodeJson
+      { tag: "ScriptValidationResultOnlyEvent"
+      , sveResult: flip E.encode sveResult (E.either E.value (E.tuple (E.value >/\< E.value)))
+      }
 
 instance DecodeJson ScriptValidationEvent where
-  decodeJson = defer \_ -> D.decode $
-    ( ScriptValidationEvent <$> D.record "ScriptValidationEvent"
-        { sveScript: D.value :: _ String
-        , sveResult: (D.either D.value (D.tuple (D.value </\> D.value))) :: _ (Either ScriptError (Tuple RawJson (Array String)))
-        , sveRedeemer: D.value :: _ String
-        , sveType: D.value :: _ ScriptType
-        }
-    )
+  decodeJson = defer \_ -> D.decode
+    $ D.sumType "ScriptValidationEvent"
+    $ Map.fromFoldable
+        [ "ScriptValidationEvent" /\
+            ( ScriptValidationEvent <$> D.object "ScriptValidationEvent"
+                { sveScript: D.value :: _ String
+                , sveResult: (D.either D.value (D.tuple (D.value </\> D.value))) :: _ (Either ScriptError (Tuple RawJson (Array String)))
+                , sveRedeemer: D.value :: _ String
+                , sveType: D.value :: _ ScriptType
+                }
+            )
+        , "ScriptValidationResultOnlyEvent" /\ (ScriptValidationResultOnlyEvent <$> D.object "ScriptValidationResultOnlyEvent" { sveResult: (D.either D.value (D.tuple (D.value </\> D.value))) :: _ (Either ScriptError (Tuple RawJson (Array String))) })
+        ]
 
 derive instance Generic ScriptValidationEvent _
 
-derive instance Newtype ScriptValidationEvent _
-
 --------------------------------------------------------------------------------
 
-_ScriptValidationEvent :: Iso' ScriptValidationEvent { sveScript :: String, sveResult :: Either ScriptError (Tuple RawJson (Array String)), sveRedeemer :: String, sveType :: ScriptType }
-_ScriptValidationEvent = _Newtype
+_ScriptValidationEvent :: Prism' ScriptValidationEvent { sveScript :: String, sveResult :: Either ScriptError (Tuple RawJson (Array String)), sveRedeemer :: String, sveType :: ScriptType }
+_ScriptValidationEvent = prism' ScriptValidationEvent case _ of
+  (ScriptValidationEvent a) -> Just a
+  _ -> Nothing
+
+_ScriptValidationResultOnlyEvent :: Prism' ScriptValidationEvent { sveResult :: Either ScriptError (Tuple RawJson (Array String)) }
+_ScriptValidationResultOnlyEvent = prism' ScriptValidationResultOnlyEvent case _ of
+  (ScriptValidationResultOnlyEvent a) -> Just a
+  _ -> Nothing
 
 --------------------------------------------------------------------------------
 
@@ -158,6 +174,7 @@ data ValidationError
   | SignatureMissing PubKeyHash
   | MintWithoutScript String
   | TransactionFeeTooLow Value Value
+  | CardanoLedgerValidationError String
 
 derive instance Eq ValidationError
 
@@ -181,6 +198,7 @@ instance EncodeJson ValidationError where
     SignatureMissing a -> E.encodeTagged "SignatureMissing" a E.value
     MintWithoutScript a -> E.encodeTagged "MintWithoutScript" a E.value
     TransactionFeeTooLow a b -> E.encodeTagged "TransactionFeeTooLow" (a /\ b) (E.tuple (E.value >/\< E.value))
+    CardanoLedgerValidationError a -> E.encodeTagged "CardanoLedgerValidationError" a E.value
 
 instance DecodeJson ValidationError where
   decodeJson = defer \_ -> D.decode
@@ -201,6 +219,7 @@ instance DecodeJson ValidationError where
         , "SignatureMissing" /\ D.content (SignatureMissing <$> D.value)
         , "MintWithoutScript" /\ D.content (MintWithoutScript <$> D.value)
         , "TransactionFeeTooLow" /\ D.content (D.tuple $ TransactionFeeTooLow </$\> D.value </*\> D.value)
+        , "CardanoLedgerValidationError" /\ D.content (CardanoLedgerValidationError <$> D.value)
         ]
 
 derive instance Generic ValidationError _
@@ -280,6 +299,11 @@ _MintWithoutScript = prism' MintWithoutScript case _ of
 _TransactionFeeTooLow :: Prism' ValidationError { a :: Value, b :: Value }
 _TransactionFeeTooLow = prism' (\{ a, b } -> (TransactionFeeTooLow a b)) case _ of
   (TransactionFeeTooLow a b) -> Just { a, b }
+  _ -> Nothing
+
+_CardanoLedgerValidationError :: Prism' ValidationError String
+_CardanoLedgerValidationError = prism' CardanoLedgerValidationError case _ of
+  (CardanoLedgerValidationError a) -> Just a
   _ -> Nothing
 
 --------------------------------------------------------------------------------

@@ -16,9 +16,10 @@ import Data.Lens.Record (prop)
 import Data.Map (Map)
 import Data.Maybe (Maybe(..))
 import Data.Newtype (class Newtype, unwrap)
+import Data.Set (Set)
 import Data.Show.Generic (genericShow)
 import Data.Tuple.Nested ((/\))
-import Ledger.Address (PaymentPubKey, PaymentPubKeyHash)
+import Ledger.Address (PaymentPubKeyHash)
 import Ledger.Typed.Tx (ConnectionError)
 import Plutus.V1.Ledger.Interval (Interval)
 import Plutus.V1.Ledger.Scripts (DatumHash)
@@ -40,6 +41,8 @@ data MkTxError
   | TypedValidatorMissing
   | DatumWrongHash DatumHash String
   | CannotSatisfyAny
+  | NoMatchingOutputFound String
+  | MultipleMatchingOutputsFound String
 
 derive instance Eq MkTxError
 
@@ -58,6 +61,8 @@ instance EncodeJson MkTxError where
     TypedValidatorMissing -> encodeJson { tag: "TypedValidatorMissing", contents: jsonNull }
     DatumWrongHash a b -> E.encodeTagged "DatumWrongHash" (a /\ b) (E.tuple (E.value >/\< E.value))
     CannotSatisfyAny -> encodeJson { tag: "CannotSatisfyAny", contents: jsonNull }
+    NoMatchingOutputFound a -> E.encodeTagged "NoMatchingOutputFound" a E.value
+    MultipleMatchingOutputsFound a -> E.encodeTagged "MultipleMatchingOutputsFound" a E.value
 
 instance DecodeJson MkTxError where
   decodeJson = defer \_ -> D.decode
@@ -73,6 +78,8 @@ instance DecodeJson MkTxError where
         , "TypedValidatorMissing" /\ pure TypedValidatorMissing
         , "DatumWrongHash" /\ D.content (D.tuple $ DatumWrongHash </$\> D.value </*\> D.value)
         , "CannotSatisfyAny" /\ pure CannotSatisfyAny
+        , "NoMatchingOutputFound" /\ D.content (NoMatchingOutputFound <$> D.value)
+        , "MultipleMatchingOutputsFound" /\ D.content (MultipleMatchingOutputsFound <$> D.value)
         ]
 
 derive instance Generic MkTxError _
@@ -129,11 +136,21 @@ _CannotSatisfyAny = prism' (const CannotSatisfyAny) case _ of
   CannotSatisfyAny -> Just unit
   _ -> Nothing
 
+_NoMatchingOutputFound :: Prism' MkTxError String
+_NoMatchingOutputFound = prism' NoMatchingOutputFound case _ of
+  (NoMatchingOutputFound a) -> Just a
+  _ -> Nothing
+
+_MultipleMatchingOutputsFound :: Prism' MkTxError String
+_MultipleMatchingOutputsFound = prism' MultipleMatchingOutputsFound case _ of
+  (MultipleMatchingOutputsFound a) -> Just a
+  _ -> Nothing
+
 --------------------------------------------------------------------------------
 
 newtype UnbalancedTx = UnbalancedTx
   { unBalancedTxTx :: Tx
-  , unBalancedTxRequiredSignatories :: Map PaymentPubKeyHash (Maybe PaymentPubKey)
+  , unBalancedTxRequiredSignatories :: Set PaymentPubKeyHash
   , unBalancedTxUtxoIndex :: Map TxOutRef TxOut
   , unBalancedTxValidityTimeRange :: Interval POSIXTime
   }
@@ -147,7 +164,7 @@ instance EncodeJson UnbalancedTx where
   encodeJson = defer \_ -> E.encode $ unwrap >$<
     ( E.record
         { unBalancedTxTx: E.value :: _ Tx
-        , unBalancedTxRequiredSignatories: (E.dictionary E.value (E.maybe E.value)) :: _ (Map PaymentPubKeyHash (Maybe PaymentPubKey))
+        , unBalancedTxRequiredSignatories: E.value :: _ (Set PaymentPubKeyHash)
         , unBalancedTxUtxoIndex: (E.dictionary E.value E.value) :: _ (Map TxOutRef TxOut)
         , unBalancedTxValidityTimeRange: E.value :: _ (Interval POSIXTime)
         }
@@ -157,7 +174,7 @@ instance DecodeJson UnbalancedTx where
   decodeJson = defer \_ -> D.decode $
     ( UnbalancedTx <$> D.record "UnbalancedTx"
         { unBalancedTxTx: D.value :: _ Tx
-        , unBalancedTxRequiredSignatories: (D.dictionary D.value (D.maybe D.value)) :: _ (Map PaymentPubKeyHash (Maybe PaymentPubKey))
+        , unBalancedTxRequiredSignatories: D.value :: _ (Set PaymentPubKeyHash)
         , unBalancedTxUtxoIndex: (D.dictionary D.value D.value) :: _ (Map TxOutRef TxOut)
         , unBalancedTxValidityTimeRange: D.value :: _ (Interval POSIXTime)
         }
@@ -169,5 +186,5 @@ derive instance Newtype UnbalancedTx _
 
 --------------------------------------------------------------------------------
 
-_UnbalancedTx :: Iso' UnbalancedTx { unBalancedTxTx :: Tx, unBalancedTxRequiredSignatories :: Map PaymentPubKeyHash (Maybe PaymentPubKey), unBalancedTxUtxoIndex :: Map TxOutRef TxOut, unBalancedTxValidityTimeRange :: Interval POSIXTime }
+_UnbalancedTx :: Iso' UnbalancedTx { unBalancedTxTx :: Tx, unBalancedTxRequiredSignatories :: Set PaymentPubKeyHash, unBalancedTxUtxoIndex :: Map TxOutRef TxOut, unBalancedTxValidityTimeRange :: Interval POSIXTime }
 _UnbalancedTx = _Newtype
