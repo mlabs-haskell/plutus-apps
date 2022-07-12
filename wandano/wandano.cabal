@@ -1,0 +1,25 @@
+cabal-version: 2.4
+name:          wandano
+version:       1.0.0
+author:        Koz Ross
+maintainer:    koz@mlabs.city
+
+common lang
+  default-language: Haskell2010
+  ghc-options:
+    -Wall -Wcompat -Wincomplete-uni-patterns
+    -Wincomplete-record-updates -Wredundant-constraints
+    -Wmissing-export-lists -Wmissing-deriving-strategies -Werror
+    -Wno-partial-type-signatures
+
+  build-depends:    base ^>=4.14
+
+library
+  import:          lang
+  exposed-modules: Wandano.ECDSA
+  build-depends:
+    , bytestring
+    , cereal
+    , secp256k1-haskell
+
+  hs-source-dirs:  src

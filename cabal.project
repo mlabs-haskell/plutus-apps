@@ -18,6 +18,7 @@ packages: doc
           plutus-tx-constraints
           plutus-use-cases
           plutus-streaming
+          wandano
           web-ghc
 
 -- We never, ever, want this.
