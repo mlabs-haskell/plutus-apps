@@ -54,6 +54,7 @@ module Ledger.Tx.CardanoAPI(
   , toCardanoTxOutDatumHash
   , toCardanoTxOutValue
   , toCardanoAddressInEra
+  , toCardanoAddressBabbage
   , toCardanoMintValue
   , toCardanoValue
   , toCardanoFee
