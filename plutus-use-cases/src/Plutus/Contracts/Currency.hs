@@ -32,7 +32,7 @@ import Control.Lens
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Semigroup (Last (..))
 import GHC.Generics (Generic)
-import Plutus.V1.Ledger.Contexts qualified as V
+import Plutus.V2.Ledger.Contexts qualified as V
 import PlutusTx qualified
 import PlutusTx.AssocMap qualified as AssocMap
 import PlutusTx.Prelude hiding (Monoid (..), Semigroup (..))
