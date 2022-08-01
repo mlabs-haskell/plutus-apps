@@ -40,12 +40,14 @@ import PlutusTx.Prelude hiding (Monoid (..), Semigroup (..))
 import Ledger (CurrencySymbol, PaymentPubKeyHash, TxId, TxOutRef (..), getCardanoTxId, pubKeyHashAddress)
 import Ledger.Constraints qualified as Constraints
 import Ledger.Scripts
+
 import Ledger.Typed.Scripts qualified as Scripts
 import Ledger.Value (TokenName, Value)
 import Ledger.Value qualified as Value
 import Plutus.Contract as Contract
 import Plutus.Contract.Wallet (getUnspentOutput)
 import Plutus.Script.Utils.V2.Scripts qualified as PV2
+import Plutus.Script.Utils.V2.Typed.Scripts.MonetaryPolicies qualified as ScriptsV2   
 import Schema (ToSchema)
 
 import Prelude (Semigroup (..))
@@ -105,7 +107,7 @@ checkPolicy c@(OneShotCurrency (refHash, refIdx) _) _ ctx@V.ScriptContext{V.scri
 
 curPolicy :: OneShotCurrency -> MintingPolicy
 curPolicy cur = mkMintingPolicyScript $
-    $$(PlutusTx.compile [|| \c -> Scripts.mkUntypedMintingPolicy (checkPolicy c) ||])
+    $$(PlutusTx.compile [|| \c -> ScriptsV2.mkUntypedMintingPolicy (checkPolicy c) ||])
         `PlutusTx.applyCode`
             PlutusTx.liftCode cur
 
