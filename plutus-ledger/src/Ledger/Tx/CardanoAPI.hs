@@ -243,9 +243,8 @@ parseAlonzoEraInCardanoModeTx =
 -- https://github.com/input-output-hk/cardano-node/pull/3837
 parseBabbageEraInCardanoModeTx :: Aeson.Value -> Parser SomeCardanoApiTx
 parseBabbageEraInCardanoModeTx =
-    undefined
-  -- parseSomeCardanoTx "Failed to parse BabbageEra 'tx' field from SomeCardanoApiTx"
-  --                    (C.AsTx C.AsBabbageEra)
+  parseSomeCardanoTx "Failed to parse BabbageEra 'tx' field from SomeCardanoApiTx"
+                     (C.AsTx C.AsBabbageEra)
 
 parseEraInCardanoModeFail :: Aeson.Value -> Parser SomeCardanoApiTx
 parseEraInCardanoModeFail _ = fail "Unable to parse 'eraInMode'"
