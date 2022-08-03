@@ -74,6 +74,7 @@ module Ledger.Tx.CardanoAPI(
 
 import Cardano.Api qualified as C
 import Cardano.Api.Byron qualified as C
+import Cardano.Api.Modes.Orphans ()
 import Cardano.Api.Shelley qualified as C
 import Cardano.BM.Data.Tracer (ToObject)
 import Cardano.Chain.Common (addrToBase58)
