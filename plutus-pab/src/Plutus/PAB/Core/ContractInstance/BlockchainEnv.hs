@@ -20,6 +20,7 @@ import Cardano.Protocol.Socket.Mock.Client qualified as MockClient
 import Data.Map qualified as Map
 import Data.Monoid (Last (..), Sum (..))
 import Ledger (Block, Slot (..), TxId (..))
+import Ledger.Params (Params (pNetworkId))
 import Plutus.PAB.Core.ContractInstance.STM (BlockchainEnv (..), InstanceClientEnv (..), InstancesState,
                                              OpenTxOutProducedRequest (..), OpenTxOutSpentRequest (..),
                                              emptyBlockchainEnv)
@@ -48,7 +49,7 @@ import Plutus.ChainIndex.Compatibility (fromCardanoBlockHeader, fromCardanoPoint
 import Plutus.ChainIndex.TxIdState qualified as TxIdState
 import Plutus.ChainIndex.TxOutBalance qualified as TxOutBalance
 import Plutus.ChainIndex.UtxoState (viewTip)
-import Plutus.Contract.CardanoAPI (fromCardanoTx, withIsCardanoEra)
+import Plutus.Contract.CardanoAPI (fromCardanoTx)
 import System.Random
 
 -- | Connect to the node and write node updates to the blockchain
@@ -128,7 +129,7 @@ processChainSyncEvent instancesState blockchainEnv event = do
   case event of
     Resume _ -> Right <$> blockAndSlot blockchainEnv
     RollForward (BlockInMode (C.Block header transactions) era) _ ->
-      withIsCardanoEra era (processBlock instancesState header blockchainEnv transactions era)
+      processBlock instancesState header blockchainEnv transactions era
     RollBackward chainPoint _ -> runRollback blockchainEnv chainPoint
 
 data SyncActionFailure
@@ -263,7 +264,7 @@ processMockBlock
     -> STM (Either SyncActionFailure (Slot, BlockNumber))
 processMockBlock
   instancesState
-  env@BlockchainEnv{beCurrentSlot, beLastSyncedBlockSlot, beLastSyncedBlockNo}
+  env@BlockchainEnv{beCurrentSlot, beLastSyncedBlockSlot, beLastSyncedBlockNo, beParams}
   transactions
   slot = do
 
@@ -277,6 +278,7 @@ processMockBlock
   when (slot > lastCurrentSlot ) $ do
     STM.writeTVar beCurrentSlot slot
 
+  let networkId = pNetworkId beParams
   if null transactions
      then do
        result <- (,) <$> STM.readTVar beLastSyncedBlockSlot <*> STM.readTVar beLastSyncedBlockNo
@@ -285,11 +287,11 @@ processMockBlock
       blockNumber <- STM.readTVar beLastSyncedBlockNo
 
       instEnv <- S.instancesClientEnv instancesState
-      updateInstances (indexBlock $ fmap fromOnChainTx transactions) instEnv
+      updateInstances (indexBlock $ fmap (fromOnChainTx networkId) transactions) instEnv
 
       let tip = Tip { tipSlot = slot
                     , tipBlockId = blockId transactions
                     , tipBlockNo = blockNumber
                     }
 
-      updateTransactionState tip env (txEvent <$> fmap fromOnChainTx transactions)
+      updateTransactionState tip env (txEvent <$> fmap (fromOnChainTx networkId) transactions)

@@ -33,7 +33,6 @@ import Data.Aeson (toJSON)
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Types (parseMaybe, (.:))
 import Data.Bifunctor (bimap)
-import Data.Coerce (coerce)
 import Data.Foldable (toList)
 import Data.Functor (void)
 import Data.List.NonEmpty (NonEmpty)
@@ -47,12 +46,11 @@ import Ledger (CardanoTx (..), Params (..))
 import Ledger.Ada qualified as Ada
 import Ledger.Constraints.OffChain (UnbalancedTx)
 import Ledger.Tx.CardanoAPI (SomeCardanoApiTx (SomeTx), ToCardanoError, fromCardanoAddress, toCardanoTxBody)
-import Ledger.Value (CurrencySymbol (CurrencySymbol), TokenName (TokenName), Value (Value))
+import Ledger.Value (Value (Value), currencySymbol, tokenName)
 import Plutus.Contract.Wallet (export)
 import Plutus.PAB.Monitoring.PABLogMsg (WalletClientMsg (BalanceTxError, WalletClientError))
 import Plutus.V1.Ledger.Api (Address)
 import PlutusTx.AssocMap qualified as Map
-import PlutusTx.Builtins.Internal (BuiltinByteString (BuiltinByteString))
 import Prettyprinter (Pretty (pretty))
 import Servant ((:<|>) ((:<|>)), (:>))
 import Servant.Client (ClientEnv, ClientError, ClientM, client, runClientM)
@@ -167,15 +165,16 @@ handleWalletClient config (Wallet _ (WalletId walletId)) event = do
         YieldUnbalancedTx utx -> yieldUnbalancedTxH utx
 
 tokenMapToValue :: C.TokenMap -> Value
-tokenMapToValue = Value . Map.fromList . fmap (bimap coerce (Map.fromList . fmap (bimap coerce (fromIntegral . C.unTokenQuantity)) . toList)) . C.toNestedList
+tokenMapToValue = Value . Map.fromList . fmap (bimap (currencySymbol . C.getHash . C.unTokenPolicyId) (Map.fromList . fmap (bimap (tokenName . C.unTokenName) (fromIntegral . C.unTokenQuantity)) . toList)) . C.toNestedList
 
 fromApiSerialisedTransaction :: C.ApiSerialisedTransaction -> CardanoTx
-fromApiSerialisedTransaction (C.ApiSerialisedTransaction (C.ApiT sealedTx)) = CardanoApiTx $ case C.cardanoTx sealedTx of
+fromApiSerialisedTransaction (C.ApiSerialisedTransaction (C.ApiT sealedTx)) = CardanoApiTx $ case C.cardanoTxIdeallyNoLaterThan (Cardano.Api.anyCardanoEra Cardano.Api.BabbageEra) sealedTx of
     Cardano.Api.InAnyCardanoEra Cardano.Api.ByronEra tx   -> SomeTx tx Cardano.Api.ByronEraInCardanoMode
     Cardano.Api.InAnyCardanoEra Cardano.Api.ShelleyEra tx -> SomeTx tx Cardano.Api.ShelleyEraInCardanoMode
     Cardano.Api.InAnyCardanoEra Cardano.Api.AllegraEra tx -> SomeTx tx Cardano.Api.AllegraEraInCardanoMode
     Cardano.Api.InAnyCardanoEra Cardano.Api.MaryEra tx    -> SomeTx tx Cardano.Api.MaryEraInCardanoMode
     Cardano.Api.InAnyCardanoEra Cardano.Api.AlonzoEra tx  -> SomeTx tx Cardano.Api.AlonzoEraInCardanoMode
+    Cardano.Api.InAnyCardanoEra Cardano.Api.BabbageEra tx -> SomeTx tx Cardano.Api.BabbageEraInCardanoMode
 
 toSealedTx :: Params -> CardanoTx -> Either ToCardanoError C.SealedTx
 toSealedTx _ (CardanoApiTx (SomeTx tx Cardano.Api.ByronEraInCardanoMode)) = Right $ C.sealedTxFromCardano $ Cardano.Api.InAnyCardanoEra Cardano.Api.ByronEra tx
@@ -183,6 +182,7 @@ toSealedTx _ (CardanoApiTx (SomeTx tx Cardano.Api.ShelleyEraInCardanoMode)) = Ri
 toSealedTx _ (CardanoApiTx (SomeTx tx Cardano.Api.AllegraEraInCardanoMode)) = Right $ C.sealedTxFromCardano $ Cardano.Api.InAnyCardanoEra Cardano.Api.AllegraEra tx
 toSealedTx _ (CardanoApiTx (SomeTx tx Cardano.Api.MaryEraInCardanoMode)) = Right $ C.sealedTxFromCardano $ Cardano.Api.InAnyCardanoEra Cardano.Api.MaryEra tx
 toSealedTx _ (CardanoApiTx (SomeTx tx Cardano.Api.AlonzoEraInCardanoMode)) = Right $ C.sealedTxFromCardano $ Cardano.Api.InAnyCardanoEra Cardano.Api.AlonzoEra tx
+toSealedTx _ (CardanoApiTx (SomeTx tx Cardano.Api.BabbageEraInCardanoMode)) = Right $ C.sealedTxFromCardano $ Cardano.Api.InAnyCardanoEra Cardano.Api.BabbageEra tx
 toSealedTx params (EmulatorTx tx) = C.sealedTxFromCardanoBody <$> toCardanoTxBody params [] tx
 toSealedTx params (Both tx _) = C.sealedTxFromCardanoBody <$> toCardanoTxBody params [] tx
 

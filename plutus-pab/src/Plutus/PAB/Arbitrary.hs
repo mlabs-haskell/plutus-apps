@@ -13,21 +13,21 @@ import Data.Aeson (Value)
 import Data.Aeson qualified as Aeson
 import Data.ByteString (ByteString)
 import Ledger qualified
-import Ledger.Address (Address (..), PaymentPubKey, PaymentPubKeyHash, StakePubKey, StakePubKeyHash)
-import Ledger.Bytes (LedgerBytes)
-import Ledger.Bytes qualified as LedgerBytes
+import Ledger.Address (PaymentPubKey, PaymentPubKeyHash, StakePubKey, StakePubKeyHash)
 import Ledger.Constraints (MkTxError)
-import Ledger.Crypto (PubKey, PubKeyHash, Signature)
+import Ledger.Crypto (PubKey, Signature)
 import Ledger.Interval (Extended, Interval, LowerBound, UpperBound)
 import Ledger.Slot (Slot)
-import Ledger.Tx (RedeemerPtr, ScriptTag, Tx, TxIn, TxInType, TxOut, TxOutRef)
+import Ledger.Tx (RedeemerPtr, ScriptTag, Tx, TxIn, TxInType)
 import Ledger.Tx.CardanoAPI (ToCardanoError)
-import Ledger.TxId (TxId)
 import Plutus.Contract.Effects (ActiveEndpoint (..), PABReq (..), PABResp (..))
 import Plutus.Contract.StateMachine (ThreadToken)
+import Plutus.Script.Utils.V1.Address (mkValidatorAddress)
 import Plutus.Script.Utils.V1.Typed.Scripts (ConnectionError, WrongOutTypeError)
-import Plutus.V1.Ledger.Api (ValidatorHash (ValidatorHash))
-import Plutus.V1.Ledger.Scripts qualified as Ledger
+import Plutus.V1.Ledger.Api (Address (..), LedgerBytes, PubKeyHash, TxId, TxOut, TxOutRef,
+                             ValidatorHash (ValidatorHash))
+import Plutus.V1.Ledger.Bytes qualified as LedgerBytes
+import Plutus.V1.Ledger.Tx qualified as PV1
 import PlutusTx qualified
 import PlutusTx.AssocMap qualified as AssocMap
 import PlutusTx.Prelude qualified as PlutusTx
@@ -103,6 +103,10 @@ instance Arbitrary TxOutRef where
     shrink = genericShrink
 
 instance Arbitrary TxInType where
+    arbitrary = genericArbitrary
+    shrink = genericShrink
+
+instance Arbitrary PV1.TxInType where
     arbitrary = genericArbitrary
     shrink = genericShrink
 
@@ -223,6 +227,10 @@ instance Arbitrary PlutusTx.BuiltinData where
     arbitrary = PlutusTx.dataToBuiltinData <$> arbitrary
     shrink d = PlutusTx.dataToBuiltinData <$> shrink (PlutusTx.builtinDataToData d)
 
+instance Arbitrary Ledger.Language where
+    arbitrary = genericArbitrary
+    shrink = genericShrink
+
 instance Arbitrary Ledger.Datum where
     arbitrary = genericArbitrary
     shrink = genericShrink
@@ -261,7 +269,8 @@ instance Arbitrary PABReq where
     arbitrary =
         oneof
             [ AwaitSlotReq <$> arbitrary
-            , pure CurrentSlotReq
+            , pure CurrentPABSlotReq
+            , pure CurrentChainIndexSlotReq
             , pure OwnContractInstanceIdReq
             , ExposeEndpointReq <$> arbitrary
             , pure OwnAddressesReq
@@ -271,7 +280,7 @@ instance Arbitrary PABReq where
             ]
 
 instance Arbitrary Address where
-    arbitrary = oneof [Ledger.pubKeyAddress <$> arbitrary <*> arbitrary, Ledger.scriptAddress <$> arbitrary]
+    arbitrary = oneof [Ledger.pubKeyAddress <$> arbitrary <*> arbitrary, mkValidatorAddress <$> arbitrary]
 
 instance Arbitrary ValidatorHash where
     arbitrary = ValidatorHash <$> arbitrary

@@ -43,7 +43,6 @@ import Ledger.Typed.Scripts qualified as Scripts
 import Ledger.Value (Value)
 import Ledger.Value qualified as Value
 import Plutus.Contract
-import Plutus.Contract.Typed.Tx qualified as Typed
 import Plutus.V1.Ledger.Api (ScriptContext (..), TxInfo (..), Validator)
 import Plutus.V1.Ledger.Contexts qualified as Validation
 import PlutusTx qualified
@@ -218,7 +217,7 @@ retrieveFundsC vesting payment = mapError (review _VestingError) $ do
         remainingOutputs = case liveness of
                             Alive -> payIntoContract remainingValue
                             Dead  -> mempty
-        tx = Typed.collectFromScript unspentOutputs ()
+        tx = Constraints.collectFromTheScript unspentOutputs ()
                 <> remainingOutputs
                 <> mustValidateIn (Interval.from nextTime)
                 <> mustBeSignedBy (vestingOwner vesting)

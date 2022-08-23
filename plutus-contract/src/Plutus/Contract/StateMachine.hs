@@ -53,22 +53,21 @@ module Plutus.Contract.StateMachine(
     , Void
     ) where
 
-import Control.Lens (_Right, makeClassyPrisms, review, (^?))
+import Control.Lens (_2, _Just, makeClassyPrisms, review, (^?))
 import Control.Monad (unless)
 import Control.Monad.Error.Lens
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Map (Map)
 import Data.Map qualified as Map
 import Data.Maybe (listToMaybe, mapMaybe)
-import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Void (Void, absurd)
 import GHC.Generics (Generic)
 import Ledger (POSIXTime, Slot, TxOutRef, Value)
 import Ledger qualified
-import Ledger.Constraints (ScriptLookups, TxConstraints, mintingPolicy, mustMintValueWithRedeemer, mustPayToTheScript,
-                           mustSpendPubKeyOutput)
+import Ledger.Constraints (ScriptLookups, TxConstraints, mustMintValueWithRedeemer, mustPayToTheScript,
+                           mustSpendPubKeyOutput, plutusV1MintingPolicy)
 import Ledger.Constraints.OffChain (UnbalancedTx)
 import Ledger.Constraints.OffChain qualified as Constraints
 import Ledger.Constraints.TxConstraints (ScriptInputConstraint (ScriptInputConstraint, icRedeemer, icTxOutRef),
@@ -77,7 +76,7 @@ import Ledger.Constraints.TxConstraints (ScriptInputConstraint (ScriptInputConst
 import Ledger.Tx qualified as Tx
 import Ledger.Typed.Scripts qualified as Scripts
 import Ledger.Value qualified as Value
-import Plutus.ChainIndex (ChainIndexTx (_citxInputs))
+import Plutus.ChainIndex (ChainIndexTx (_citxInputs, _citxRedeemers))
 import Plutus.Contract (AsContractError (_ConstraintResolutionContractError, _ContractError), Contract, ContractError,
                         Promise, adjustUnbalancedTx, awaitPromise, isSlot, isTime, logWarn, mapError, never,
                         ownFirstPaymentPubKeyHash, ownUtxos, promiseBind, select, submitTxConfirmed, utxoIsProduced,
@@ -92,7 +91,6 @@ import Plutus.Contract.StateMachine.ThreadToken (ThreadToken (ThreadToken), curP
 import Plutus.Contract.Wallet (getUnspentOutput)
 import Plutus.Script.Utils.V1.Scripts (scriptCurrencySymbol)
 import Plutus.Script.Utils.V1.Typed.Scripts qualified as Typed
-import Plutus.V1.Ledger.Api qualified as Ledger
 import PlutusTx qualified
 import PlutusTx.Monoid (inv)
 
@@ -128,8 +126,9 @@ getInput ::
     -> ChainIndexTx
     -> Maybe i
 getInput outRef tx = do
-    (_validator, Ledger.Redeemer r, _) <-
-      listToMaybe $ mapMaybe Tx.inScripts $ filter (\Tx.TxIn{Tx.txInRef} -> outRef == txInRef) $ Set.toList $ _citxInputs tx
+    -- We retrieve the correspondent redeemer according to the index of txIn in the list
+    let findRedeemer (ix, _) = Map.lookup (Tx.RedeemerPtr Tx.Spend ix) (_citxRedeemers tx)
+    Ledger.Redeemer r <- listToMaybe $ mapMaybe findRedeemer $ filter (\(_, Tx.TxIn{Tx.txInRef}) -> outRef == txInRef) $ zip [0..] $ _citxInputs tx
     PlutusTx.fromBuiltinData r
 
 getStates
@@ -141,7 +140,7 @@ getStates
 getStates (SM.StateMachineInstance _ si) refMap =
     flip mapMaybe (Map.toList refMap) $ \(txOutRef, ciTxOut) -> do
       let txOut = Tx.toTxOut ciTxOut
-      datum <- ciTxOut ^? Tx.ciTxOutDatum . _Right
+      datum <- ciTxOut ^? Tx.ciTxOutScriptDatum . _2 . _Just
       ocsTxOutRef <- either (const Nothing) Just $ Typed.typeScriptTxOutRef si txOutRef txOut datum
       pure OnChainState{ocsTxOutRef}
 
@@ -442,7 +441,7 @@ runInitialiseWith customLookups customConstraints StateMachineClient{scInstance}
               mustMintValueWithRedeemer red (SM.threadTokenValueOrZero scInstance)
               <> mustSpendPubKeyOutput ttOutRef
           lookups = Constraints.typedValidatorLookups typedValidator
-              <> foldMap (mintingPolicy . curPolicy . ttOutRef) (smThreadToken stateMachine)
+              <> foldMap (plutusV1MintingPolicy . curPolicy . ttOutRef) (smThreadToken stateMachine)
               <> Constraints.unspentOutputs utxo
               <> customLookups
       utx <- mapError (review _ConstraintResolutionContractError) (mkTxContract lookups constraints)
@@ -541,7 +540,7 @@ mkStep client@StateMachineClient{scInstance} input = do
                         lookups =
                             Constraints.typedValidatorLookups typedValidator
                             <> Constraints.unspentOutputs utxo
-                            <> if isFinal then foldMap (mintingPolicy . curPolicy . ttOutRef) (smThreadToken stateMachine) else mempty
+                            <> if isFinal then foldMap (plutusV1MintingPolicy . curPolicy . ttOutRef) (smThreadToken stateMachine) else mempty
                         red = Ledger.Redeemer (PlutusTx.toBuiltinData (Scripts.validatorHash typedValidator, Burn))
                         unmint = if isFinal then mustMintValueWithRedeemer red (inv $ SM.threadTokenValueOrZero scInstance) else mempty
                         outputConstraints =

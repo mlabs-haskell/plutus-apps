@@ -52,7 +52,6 @@ import PlutusTx qualified
 import PlutusTx.Prelude
 
 import Ledger (Address, POSIXTime, PaymentPubKey, PaymentPubKeyHash)
-import Ledger qualified
 import Ledger.Constraints qualified as Constraints
 import Ledger.Constraints.TxConstraints (TxConstraints)
 import Ledger.Interval qualified as Interval
@@ -64,6 +63,7 @@ import Plutus.Contract
 import Plutus.Contract.Oracle (Observation (..), SignedMessage (..))
 import Plutus.Contract.Oracle qualified as Oracle
 import Plutus.Contract.Util (loopM)
+import Plutus.Script.Utils.V1.Address (mkValidatorAddress)
 import Plutus.Script.Utils.V1.Scripts (validatorHash)
 import Plutus.V1.Ledger.Api (Datum (Datum), Validator, ValidatorHash)
 
@@ -439,7 +439,7 @@ initialState ft =
     Running (Margins{ftsShortMargin=im, ftsLongMargin=im})
 
 futureAddress :: Future -> FutureAccounts -> Address
-futureAddress ft fo = Ledger.scriptAddress (validator ft fo)
+futureAddress ft fo = mkValidatorAddress (validator ft fo)
 
 {-# INLINABLE violatingRole #-}
 -- | The role that violated its margin requirements

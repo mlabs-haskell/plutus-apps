@@ -36,6 +36,7 @@ module Plutus.Contract.Test(
     , assertInstanceLog
     , assertNoFailedTransactions
     , assertValidatedTransactionCount
+    , assertValidatedTransactionCountOfTotal
     , assertFailedTransaction
     , assertHooks
     , assertResponses
@@ -71,7 +72,7 @@ module Plutus.Contract.Test(
     , minLogLevel
     , emulatorConfig
     , changeInitialWalletValue
-    , allowBigTransactions
+    , increaseTransactionLimits
     -- * Etc
     , goldenPir
     ) where
@@ -111,7 +112,6 @@ import Test.Tasty.Providers (TestTree)
 
 import Ledger.Ada qualified as Ada
 import Ledger.Constraints.OffChain (UnbalancedTx)
-import Ledger.Tx (Tx, onCardanoTx)
 import Plutus.Contract.Effects qualified as Requests
 import Plutus.Contract.Request qualified as Request
 import Plutus.Contract.Resumable (Request (..), Response (..))
@@ -127,8 +127,7 @@ import Ledger.Generators qualified as Gen
 import Ledger.Index (ScriptValidationEvent, ValidationError)
 import Ledger.Slot (Slot)
 import Ledger.Value (Value)
-import Plutus.V1.Ledger.Scripts (Validator)
-import Plutus.V1.Ledger.Scripts qualified as Ledger
+import Plutus.V1.Ledger.Scripts qualified as PV1
 
 import Data.IORef
 import Plutus.Contract.Test.Coverage
@@ -189,8 +188,8 @@ changeInitialWalletValue wallet = over (emulatorConfig . initialChainState . _Le
 -- | Set higher limits on transaction size and execution units.
 -- This can be used to work around @MaxTxSizeUTxO@ and @ExUnitsTooBigUTxO@ errors.
 -- Note that if you need this your Plutus script will probably not validate on Mainnet.
-allowBigTransactions :: CheckOptions -> CheckOptions
-allowBigTransactions = over (emulatorConfig . params) Ledger.allowBigTransactions
+increaseTransactionLimits :: CheckOptions -> CheckOptions
+increaseTransactionLimits = over (emulatorConfig . params) Ledger.increaseTransactionLimits
 
 -- | Check if the emulator trace meets the condition
 checkPredicate ::
@@ -284,7 +283,11 @@ checkPredicateInnerStream CheckOptions{_minLogLevel, _emulatorConfig} (TracePred
                 assert False
             Right r -> assert r
 
--- | A version of 'checkPredicateGen' with configurable 'CheckOptions'
+-- | A version of 'checkPredicateGen' with configurable 'CheckOptions'.
+--
+--   Note that the 'InitialChainState' in the 'EmulatorConfig' of the
+--   'CheckOptions' will be replaced with the 'mockchainInitialTxPool' generated
+--   by the model.
 checkPredicateGenOptions ::
     CheckOptions
     -> GeneratorModel
@@ -629,13 +632,13 @@ assertChainEvents' logMsg predicate = TracePredicate $
 
 -- | Assert that at least one transaction failed to validate, and that all
 --   transactions that failed meet the predicate.
-assertFailedTransaction :: (Tx -> ValidationError -> [ScriptValidationEvent] -> Bool) -> TracePredicate
+assertFailedTransaction :: (Ledger.CardanoTx -> ValidationError -> [ScriptValidationEvent] -> Bool) -> TracePredicate
 assertFailedTransaction predicate = TracePredicate $
     flip postMapM (L.generalize $ Folds.failedTransactions Nothing) $ \case
         [] -> do
             tell @(Doc Void) $ "No transactions failed to validate."
             pure False
-        xs -> pure (all (\(_, t, e, evts, _) -> onCardanoTx (\t' -> predicate t' e evts) (const True) t) xs)
+        xs -> pure (all (\(_, t, e, evts, _) -> predicate t e evts) xs)
 
 -- | Assert that no transaction failed to validate.
 assertNoFailedTransactions :: TracePredicate
@@ -649,13 +652,21 @@ assertNoFailedTransactions = TracePredicate $
 
 -- | Assert that n transactions validated, and no transaction failed to validate.
 assertValidatedTransactionCount :: Int -> TracePredicate
-assertValidatedTransactionCount expected =
-    assertNoFailedTransactions
-    .&&.
+assertValidatedTransactionCount expected = assertValidatedTransactionCountOfTotal expected expected
+
+-- | Assert that n transactions validated, and the rest failed.
+assertValidatedTransactionCountOfTotal :: Int -> Int -> TracePredicate
+assertValidatedTransactionCountOfTotal expectedValid expectedTotal =
     TracePredicate (flip postMapM (L.generalize Folds.validatedTransactions) $ \xs ->
         let actual = length xs - 1 in -- ignore the initial wallet distribution transaction
-        if actual == expected then pure True else do
+        if actual == expectedValid then pure True else do
             tell @(Doc Void) $ "Unexpected number of validated transactions:" <+> pretty actual
+            pure False
+    ) .&&.
+    TracePredicate (flip postMapM (L.generalize $ Folds.failedTransactions Nothing) $ \xs ->
+        let actual = length xs in
+        if actual == expectedTotal - expectedValid then pure True else do
+            tell @(Doc Void) $ "Unexpected number of invalid transactions:" <+> pretty actual
             pure False
     )
 
@@ -694,7 +705,7 @@ assertAccumState contract inst p nm = TracePredicate $
         let result = p w
         unless result $ do
             tell @(Doc Void) $ vsep
-                [ "Accumulated state of of" <+> pretty inst <> colon
+                [ "Accumulated state of" <+> pretty inst <> colon
                 , indent 2 (viaShow w)
                 , "Failed" <+> squotes (fromString nm)
                 ]
@@ -702,10 +713,10 @@ assertAccumState contract inst p nm = TracePredicate $
 
 -- | Assert that the size of a 'Validator' is below
 --   the maximum.
-reasonable :: Validator -> Integer -> HUnit.Assertion
+reasonable :: PV1.Validator -> Integer -> HUnit.Assertion
 reasonable = reasonable' putStrLn
 
-reasonable' :: (String -> IO ()) -> Validator -> Integer -> HUnit.Assertion
+reasonable' :: (String -> IO ()) -> PV1.Validator -> Integer -> HUnit.Assertion
 reasonable' logger (Ledger.unValidatorScript -> s) maxSize = do
     let sz = Ledger.scriptSize s
         msg = "Script too big! Max. size: " <> show maxSize <> ". Actual size: " <> show sz

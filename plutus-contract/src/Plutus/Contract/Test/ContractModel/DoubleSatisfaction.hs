@@ -43,7 +43,6 @@ import Data.Default
 import Data.Either
 import Data.Map qualified as Map
 import Data.Maybe
-import Data.Set qualified as Set
 import Ledger.Params (EmulatorEra, Params)
 
 import Ledger (unPaymentPrivateKey, unPaymentPubKeyHash)
@@ -57,10 +56,9 @@ import Ledger.Validation qualified as Validation
 import Ledger.Value (adaOnlyValue)
 import Plutus.Contract.Test hiding (not)
 import Plutus.Contract.Test.ContractModel.Internal
-import Plutus.Script.Utils.V1.Scripts (datumHash, validatorHash)
+import Plutus.Script.Utils.Scripts (datumHash)
 import Plutus.Trace.Emulator as Trace (EmulatorTrace, activateContract, callEndpoint, runEmulatorStream)
 import Plutus.V1.Ledger.Address
-import Plutus.V1.Ledger.TxId
 import Streaming qualified as S
 import Test.QuickCheck.StateModel hiding (Action, Actions (..), actionName, arbitraryAction, initialState, monitoring,
                                    nextState, pattern Actions, perform, precondition, shrinkAction, stateAfter)
@@ -299,12 +297,12 @@ showPretty cand = show . vcat $
   | let tx0 = cand ^. to dsceTargetMattersProof . dsTx
         tx1 = cand ^. to dsceValueStolenProof . dsTx
         tx2 = cand ^. to dsceOriginalTransaction . dsTx
-  , ref <- Set.toList $  tx0 ^. inputs
-                      <> tx1 ^. inputs
-                      <> tx2 ^. inputs
-                      <> tx0 ^. collateralInputs
-                      <> tx1 ^. collateralInputs
-                      <> tx2 ^. collateralInputs
+  , ref <- tx0 ^. inputs
+          <> tx1 ^. inputs
+          <> tx2 ^. inputs
+          <> tx0 ^. collateralInputs
+          <> tx1 ^. collateralInputs
+          <> tx2 ^. collateralInputs
   ]
 
 isVulnerable :: DoubleSatisfactionCounterexample -> Bool
@@ -360,7 +358,8 @@ doubleSatisfactionCounterexamples dsc =
                                    , txOutRefIdx = 1
                                    }
         newFakeTxIn = TxIn { txInRef = newFakeTxOutRef
-                           , txInType = Just $ ConsumeScriptAddress alwaysOkValidator
+                           , txInType = Just $ ConsumeScriptAddress PlutusV1
+                                                                    alwaysOkValidator
                                                                     redeemerEmpty
                                                                     datumEmpty
                            }
@@ -370,7 +369,7 @@ doubleSatisfactionCounterexamples dsc =
                                         & dsTx   .~ tx
   , let valueStolen0 = dsc & l . outAddress .~ stealerAddr
                            & dsTx . outputs %~ (withDatumOut:)
-                           & dsTx . inputs %~ (Set.insert newFakeTxIn)
+                           & dsTx . inputs %~ (newFakeTxIn:)
                            & dsUtxoIndex %~
                               (\ (UtxoIndex m) -> UtxoIndex $ Map.insert newFakeTxOutRef
                                                                          newFakeTxScriptOut m)

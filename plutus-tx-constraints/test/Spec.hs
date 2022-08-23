@@ -1,8 +1,6 @@
 {-# LANGUAGE DataKinds         #-}
 {-# LANGUAGE FlexibleContexts  #-}
-{-# LANGUAGE NamedFieldPuns    #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TemplateHaskell   #-}
 {-# LANGUAGE TypeApplications  #-}
 
 module Main(main) where
@@ -44,15 +42,19 @@ import PlutusTx.AssocMap qualified as AMap
 import PlutusTx.Builtins.Internal (BuiltinByteString (..))
 import PlutusTx.Prelude qualified as Pl
 import Test.Tasty (TestTree, defaultMain, testGroup)
-import Test.Tasty.Hedgehog (testProperty)
+import Test.Tasty.Hedgehog (testPropertyNamed)
 
 main :: IO ()
 main = defaultMain tests
 
 tests :: TestTree
 tests = testGroup "all tests"
-    [ testProperty "mustPayToPubKeyAddress should create output addresses with stake pub key hash" mustPayToPubKeyAddressStakePubKeyNotNothingProp
-    -- , testProperty "mustSpendScriptOutputWithMatchingDatumAndValue" testMustSpendScriptOutputWithMatchingDatumAndValue
+    [ testPropertyNamed "mustPayToPubKeyAddress should create output addresses with stake pub key hash"
+                        "mustPayToPubKeyAddressStakePubKeyNotNothingProp"
+                        mustPayToPubKeyAddressStakePubKeyNotNothingProp
+    -- , testPropertyNamed "mustSpendScriptOutputWithMatchingDatumAndValue"
+    --                     "testMustSpendScriptOutputWithMatchingDatumAndValue"
+    --                     testMustSpendScriptOutputWithMatchingDatumAndValue
     ]
 
 -- | Reduce one of the elements in a 'Value' by one.
@@ -95,8 +97,8 @@ mustPayToPubKeyAddressStakePubKeyNotNothingProp = property $ do
             Hedgehog.assert $ not $ null stakingCreds
             forM_ stakingCreds ((===) skh)
     where
-        stakePaymentPubKeyHash :: C.TxOut C.CtxTx C.AlonzoEra -> Maybe StakePubKeyHash
-        stakePaymentPubKeyHash (C.TxOut addr _ _) = do
+        stakePaymentPubKeyHash :: C.TxOut C.CtxTx C.BabbageEra -> Maybe StakePubKeyHash
+        stakePaymentPubKeyHash (C.TxOut addr _ _ _) = do
             txOutAddress <- either (const Nothing) Just $ C.fromCardanoAddressInEra addr
             stakeCred <- addressStakingCredential txOutAddress
             case stakeCred of
@@ -155,8 +157,8 @@ mustPayToPubKeyAddressStakePubKeyNotNothingProp = property $ do
 -- lookups1 :: ScriptLookups UnitTest
 -- lookups1
 --     = Constraints.unspentOutputs utxo1
---     <> Constraints.otherScript (Scripts.validatorScript alwaysSucceedValidator)
---     <> Constraints.otherScript (Scripts.validatorScript validator1)
+--     <> Constraints.plutusV1OtherScript (Scripts.validatorScript alwaysSucceedValidator)
+--     <> Constraints.plutusV1OtherScript (Scripts.validatorScript validator1)
 
 -- testMustSpendScriptOutputWithMatchingDatumAndValue :: Property
 -- testMustSpendScriptOutputWithMatchingDatumAndValue = testScriptInputs lookups1 (constraints1 alwaysSucceedValidatorHash)

@@ -46,14 +46,14 @@ import Data.Map qualified as Map
 import Data.Maybe (catMaybes)
 import GHC.Generics (Generic)
 import Ledger (Address, POSIXTime, PaymentPubKeyHash, ScriptContext, TxOutRef, Value)
-import Ledger qualified
 import Ledger.Ada qualified as Ada
 import Ledger.Constraints qualified as Constraints
 import Ledger.Tx (ChainIndexTxOut (..))
 import Ledger.Typed.Scripts qualified as Scripts
 import Playground.Contract (ToSchema)
-import Plutus.Contract (AsContractError, Contract, Endpoint, Promise, adjustUnbalancedTx, collectFromScript, endpoint,
-                        fundsAtAddressGeq, logInfo, mkTxConstraints, selectList, type (.\/), yieldUnbalancedTx)
+import Plutus.Contract (AsContractError, Contract, Endpoint, Promise, adjustUnbalancedTx, endpoint, fundsAtAddressGeq,
+                        logInfo, mkTxConstraints, selectList, type (.\/), yieldUnbalancedTx)
+import Plutus.Script.Utils.V1.Address (mkValidatorAddress)
 import Plutus.V1.Ledger.Scripts (Datum (Datum), Validator)
 import PlutusTx qualified
 import PlutusTx.Code (getCovIdx)
@@ -93,7 +93,7 @@ instance Scripts.ValidatorTypes Game where
 
 -- | The address of the game (the hash of its validator script)
 gameAddress :: GameParam -> Address
-gameAddress = Ledger.scriptAddress . gameValidator
+gameAddress = mkValidatorAddress . gameValidator
 
 -- | The validator script of the game.
 gameValidator :: GameParam -> Validator
@@ -173,7 +173,7 @@ guess = endpoint @"guess" $ \GuessArgs { guessArgsGameParam, guessArgsSecret } -
     let lookups = Constraints.typedValidatorLookups (gameInstance guessArgsGameParam)
                Haskell.<> Constraints.unspentOutputs utxos
         redeemer = clearString guessArgsSecret
-        tx       = collectFromScript utxos redeemer
+        tx       = Constraints.collectFromTheScript utxos redeemer
 
     unbalancedTx <- mkTxConstraints lookups tx
     yieldUnbalancedTx unbalancedTx
@@ -186,7 +186,7 @@ findSecretWordValue =
 -- | Extract the secret word in the Datum of a given transaction output is possible
 secretWordValue :: ChainIndexTxOut -> Maybe HashedString
 secretWordValue o = do
-  Datum d <- either (const Nothing) Just (_ciTxOutDatum o)
+  Datum d <- snd (_ciTxOutScriptDatum o)
   PlutusTx.fromBuiltinData d
 
 contract :: AsContractError e => Contract () GameSchema e ()

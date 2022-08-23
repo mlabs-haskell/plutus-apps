@@ -20,7 +20,6 @@ import Control.Monad.State (StateT, evalStateT, runState)
 import Data.List (groupBy)
 import Data.Map (Map)
 import Data.Map qualified as Map
-import Data.Set qualified as Set
 import Ledger (Block, Blockchain, OnChainTx (..), TxIn (TxIn), TxOut (TxOut), ValidationPhase (..), Value,
                consumableInputs, eitherTx, outValue, txInRef, txOutRefId, txOutRefIdx, txOutValue)
 import Ledger.Tx qualified as Tx
@@ -48,7 +47,7 @@ annotateTransaction sequenceId tx = do
                   in case Map.lookup key cPreviousOutputs of
                          Just txOut -> pure $ DereferencedInput txIn txOut
                          Nothing    -> pure $ InputNotFound key)
-            (Set.toList $ consumableInputs tx)
+            (consumableInputs tx)
     let txId = eitherTx Tx.getCardanoTxId Tx.getCardanoTxId tx
         txOuts = eitherTx (const []) Tx.getCardanoTxOutputs tx
         newOutputs =
@@ -87,7 +86,7 @@ annotateTransaction sequenceId tx = do
             , valid = eitherTx (const False) (const True) tx
             }
     where
-        getEmulatorTx = Tx.onCardanoTx id (error "Wallet.Rollup.annotateTransaction: Expecting a mock tx, not an Alonzo tx.")
+        getEmulatorTx = Tx.onCardanoTx id (error "Wallet.Rollup.annotateTransaction: Expecting a mock tx, not a cardano-api tx.")
 
 annotateChainSlot :: Monad m => Int -> Block -> StateT Rollup m [AnnotatedTx]
 annotateChainSlot slotIndex =

@@ -20,6 +20,8 @@ module Ledger.Tx.Constraints(
     , TC.mustSpendOutputFromTheScript
     , TC.mustSpendScriptOutput
     , TC.mustSpendScriptOutputWithMatchingDatumAndValue
+    , TC.mustUseOutputAsCollateral
+    , TC.mustReferenceOutput
     , TC.mustValidateIn
     , TC.mustBeSignedBy
     , TC.mustProduceAtLeast
@@ -28,11 +30,16 @@ module Ledger.Tx.Constraints(
     , TC.mustPayToOtherScriptAddress
     , TC.mustHashDatum
     , TC.mustSatisfyAnyOf
+    -- * Defining off-chain only constraints
+    , TC.collectFromPlutusV1Script
+    , TC.collectFromPlutusV1ScriptFilter
+    , TC.collectFromTheScriptFilter
+    , TC.collectFromTheScript
+    , TC.collectFromPlutusV2Script
+    , TC.collectFromPlutusV2ScriptFilter
     -- * Queries on constraints
     , TC.modifiesUtxoSet
     , TC.isSatisfiable
-    -- * On-chain validation
-    , checkScriptContext
     -- * Off-chain transaction generation
     , OC.UnbalancedTx(..)
     , OC.MkTxError(..)
@@ -45,15 +52,16 @@ module Ledger.Tx.Constraints(
     , OC.ScriptLookups(..)
     , OC.typedValidatorLookups
     , OC.unspentOutputs
-    , OC.mintingPolicy
-    , OC.otherScript
+    , OC.plutusV1MintingPolicy
+    , OC.plutusV2MintingPolicy
+    , OC.plutusV1OtherScript
+    , OC.plutusV2OtherScript
     , OC.otherData
     , OC.paymentPubKey
     , OC.ownPaymentPubKeyHash
     , OC.ownStakePubKeyHash
     ) where
 
-import Ledger.Constraints.OnChain (checkScriptContext)
 import Ledger.Constraints.TxConstraints qualified as TC
 import Ledger.Tx.Constraints.OffChain qualified as OC
 
@@ -65,4 +73,4 @@ import Ledger.Tx.Constraints.OffChain qualified as OC
 -- 'Ledger.Tx.Constraints.TxConstraints.TxConstraints' value it can be used both to generate a transaction that
 -- satisfies the constraints (off-chain, using 'Ledger.Tx.Constraints.TxConstraints.OffChain.mkTx') and to check whether
 -- a given pending transaction meets the constraints (on-chain, using
--- 'checkScriptContext').
+-- 'Ledger.Constraints.OnChain.V1.checkScriptContext', 'Ledger.Constraints.OnChain.V2.checkScriptContext').

@@ -1,6 +1,6 @@
 cabal-version: 2.4
 name:          plutus-streaming
-version:       0.1.0.0
+version:       1.0.0.0
 author:        Andrea Bedini
 maintainer:    andrea.bedini@iohk.io
 
@@ -35,7 +35,7 @@ library
   -- Other IOG dependencies
   --------------------------
   build-depends:
-    , cardano-api
+    , cardano-api        >=1.35
     , ouroboros-network
 
   ------------------------
@@ -63,7 +63,7 @@ executable plutus-streaming-example-1
   --------------------------
   -- Other IOG dependencies
   --------------------------
-  build-depends:  cardano-api
+  build-depends:  cardano-api >=1.35
 
   ------------------------
   -- Non-IOG dependencies
@@ -89,14 +89,14 @@ executable plutus-streaming-example-2
   -- Local components
   --------------------
   build-depends:
-    , plutus-ledger
-    , plutus-script-utils
+    , plutus-ledger        >=1.0.0
+    , plutus-script-utils  >=1.0.0
     , plutus-streaming
 
   --------------------------
   -- Other IOG dependencies
   --------------------------
-  build-depends:  cardano-api
+  build-depends:  cardano-api >=1.35
 
   ------------------------
   -- Non-IOG dependencies
@@ -121,13 +121,13 @@ executable plutus-streaming-example-3
   -- Local components
   --------------------
   build-depends:
-    , plutus-chain-index-core
+    , plutus-chain-index-core  >=1.0.0
     , plutus-streaming
 
   --------------------------
   -- Other IOG dependencies
   --------------------------
-  build-depends:  cardano-api
+  build-depends:  cardano-api >=1.35
 
   ------------------------
   -- Non-IOG dependencies

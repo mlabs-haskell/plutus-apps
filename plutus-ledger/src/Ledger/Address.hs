@@ -12,27 +12,26 @@ module Ledger.Address
     , paymentPubKeyHash
     , pubKeyHashAddress
     , pubKeyAddress
-    , scriptAddress
     , scriptValidatorHashAddress
     ) where
 
+import Cardano.Crypto.Wallet qualified as Crypto
 import Codec.Serialise (Serialise)
 import Data.Aeson (FromJSON, FromJSONKey, ToJSON, ToJSONKey)
 import Data.Hashable (Hashable)
 import Data.OpenApi qualified as OpenApi
 import GHC.Generics (Generic)
-import Ledger.Crypto (PrivateKey, PubKey (PubKey), PubKeyHash (PubKeyHash), pubKeyHash)
+import Ledger.Crypto (PubKey (PubKey), PubKeyHash (PubKeyHash), pubKeyHash)
 import Ledger.Orphans ()
-import Plutus.Script.Utils.V1.Scripts (validatorHash)
+import Ledger.Scripts (StakeValidatorHash (..), ValidatorHash (..))
 import Plutus.V1.Ledger.Address as Export hiding (pubKeyHashAddress)
 import Plutus.V1.Ledger.Credential (Credential (PubKeyCredential, ScriptCredential), StakingCredential (StakingHash))
-import Plutus.V1.Ledger.Scripts (StakeValidatorHash (..), Validator, ValidatorHash (..))
 import PlutusTx qualified
 import PlutusTx.Lift (makeLift)
 import PlutusTx.Prelude qualified as PlutusTx
 import Prettyprinter (Pretty)
 
-newtype PaymentPrivateKey = PaymentPrivateKey { unPaymentPrivateKey :: PrivateKey }
+newtype PaymentPrivateKey = PaymentPrivateKey { unPaymentPrivateKey :: Crypto.XPrv }
 
 newtype PaymentPubKey = PaymentPubKey { unPaymentPubKey :: PubKey }
     deriving stock (Eq, Ord, Generic)
@@ -69,8 +68,6 @@ paymentPubKeyHash (PaymentPubKey pk) = PaymentPubKeyHash (pubKeyHash pk)
 {-# INLINABLE pubKeyHashAddress #-}
 -- | The address that should be targeted by a transaction output locked by the
 -- given public payment key (with it's public stake key).
---
--- TODO: This should be moved to Plutus.V1(or V2).Ledger.Address with the newtypes.
 pubKeyHashAddress :: PaymentPubKeyHash -> Maybe StakePubKeyHash -> Address
 pubKeyHashAddress (PaymentPubKeyHash pkh) skh =
     Address (PubKeyCredential pkh)
@@ -82,11 +79,6 @@ pubKeyAddress :: PaymentPubKey -> Maybe StakePubKey -> Address
 pubKeyAddress (PaymentPubKey pk) skh =
     Address (PubKeyCredential (pubKeyHash pk))
             (fmap (StakingHash . PubKeyCredential . pubKeyHash . unStakePubKey) skh)
-
-{-# INLINABLE scriptAddress #-}
--- | The address that should be used by a transaction output locked by the given validator script.
-scriptAddress :: Validator -> Address
-scriptAddress validator = Address (ScriptCredential (validatorHash validator)) Nothing
 
 {-# INLINABLE scriptValidatorHashAddress #-}
 -- | The address that should be used by a transaction output locked by the given validator script

@@ -21,8 +21,8 @@ import Plutus.Contract as Con
 import Plutus.Contract.Test (assertAccumState, assertValidatedTransactionCount, changeInitialWalletValue,
                              checkPredicate, checkPredicateOptions, defaultCheckOptions, w1, w2)
 import Plutus.Script.Utils.V1.Generators (someTokenValue)
-import Plutus.Script.Utils.V1.Scripts (mintingPolicyHash, scriptCurrencySymbol, validatorHash)
-import Plutus.Script.Utils.V1.Typed.Scripts.MonetaryPolicies qualified as MPS
+import Plutus.Script.Utils.V1.Scripts qualified as Scripts
+import Plutus.Script.Utils.V1.Typed.Scripts qualified as TypedScripts
 import Plutus.Trace qualified as Trace
 import Plutus.V1.Ledger.Scripts (Datum (Datum), unitDatum, unitRedeemer)
 import PlutusTx qualified
@@ -44,7 +44,7 @@ balanceTxnMinAda =
         ff = someTokenValue "ff" 1
         options = defaultCheckOptions
             & changeInitialWalletValue w1 (Value.scale 1000 (ee <> ff) <>)
-        vHash = validatorHash someValidator
+        vHash = Scripts.validatorHash someValidator
 
         contract :: Contract () EmptySchema ContractError ()
         contract = do
@@ -55,7 +55,7 @@ balanceTxnMinAda =
             let txOutRef = head (Map.keys utxo)
                 constraints2 = L.Constraints.mustSpendScriptOutput txOutRef unitRedeemer
                     <> L.Constraints.mustPayToOtherScript vHash unitDatum (Value.scale 200 ee)
-                lookups2 = L.Constraints.unspentOutputs utxo <> L.Constraints.otherScript someValidator
+                lookups2 = L.Constraints.unspentOutputs utxo <> L.Constraints.plutusV1OtherScript someValidator
             utx2 <- Con.adjustUnbalancedTx $ either (error . show) id $ L.Constraints.mkTx @Void lookups2 constraints2
             submitTxConfirmed utx2
 
@@ -69,11 +69,11 @@ balanceTxnMinAda2 :: TestTree
 balanceTxnMinAda2 =
     let vA n = someTokenValue "A" n
         vB n = someTokenValue "B" n
-        mps  = MPS.mkForwardingMintingPolicy vHash
-        vL n = Value.singleton (Value.mpsSymbol $ mintingPolicyHash mps) "L" n
+        mps  = TypedScripts.mkForwardingMintingPolicy vHash
+        vL n = Value.singleton (Value.mpsSymbol $ Scripts.mintingPolicyHash mps) "L" n
         options = defaultCheckOptions
             & changeInitialWalletValue w1 (<> vA 1 <> vB 2)
-        vHash = validatorHash someValidator
+        vHash = Scripts.validatorHash someValidator
         payToWallet w = L.Constraints.mustPayToPubKey (EM.mockWalletPaymentPubKeyHash w)
         mkTx lookups constraints = Con.adjustUnbalancedTx . either (error . show) id $ L.Constraints.mkTx @Void lookups constraints
 
@@ -91,8 +91,8 @@ balanceTxnMinAda2 =
             utxos <- utxosAt someAddress
             let txOutRef = head (Map.keys utxos)
                 lookups = L.Constraints.unspentOutputs utxos
-                        <> L.Constraints.otherScript someValidator
-                        <> L.Constraints.mintingPolicy mps
+                        <> L.Constraints.plutusV1OtherScript someValidator
+                        <> L.Constraints.plutusV1MintingPolicy mps
                 constraints = L.Constraints.mustSpendScriptOutput txOutRef unitRedeemer                                        -- spend utxo1
                             <> L.Constraints.mustPayToOtherScript vHash unitDatum (vB 1)                                       -- 2 ada and 1 B to script
                             <> L.Constraints.mustPayToOtherScript vHash (Datum $ PlutusTx.toBuiltinData (0 :: Integer)) (vB 1) -- 2 ada and 1 B to script (different datum)
@@ -109,7 +109,7 @@ balanceTxnMinAda2 =
 
 balanceTxnNoExtraOutput :: TestTree
 balanceTxnNoExtraOutput =
-    let vL n = Value.singleton (scriptCurrencySymbol coinMintingPolicy) "coinToken" n
+    let vL n = Value.singleton (Scripts.scriptCurrencySymbol coinMintingPolicy) "coinToken" n
         mkTx lookups constraints = either (error . show) id $ L.Constraints.mkTx @Void lookups constraints
 
         mintingOperation :: Contract [Int] EmptySchema ContractError ()
@@ -117,7 +117,7 @@ balanceTxnNoExtraOutput =
             pkh <- Con.ownFirstPaymentPubKeyHash
 
             let val = vL 200
-                lookups = L.Constraints.mintingPolicy coinMintingPolicy
+                lookups = L.Constraints.plutusV1MintingPolicy coinMintingPolicy
                 constraints = L.Constraints.mustMintValue val
                     <> L.Constraints.mustPayToPubKey pkh (val <> Ada.toValue Ledger.minAdaTxOut)
 

@@ -35,7 +35,6 @@ import Ledger.Value (Value, geq)
 import Plutus.V1.Ledger.Api (ScriptContext (..), TxInfo (..))
 
 import Plutus.Contract
-import Plutus.Contract.Typed.Tx qualified as Typed
 import PlutusTx qualified
 import PlutusTx.Prelude hiding (Applicative (..), Semigroup (..), check, foldMap)
 
@@ -143,7 +142,7 @@ redeemEp = endpoint @"redeem" redeem
       unspentOutputs <- utxosAt escrowAddress
 
       let value = foldMap (view Tx.ciTxOutValue) unspentOutputs
-          tx = Typed.collectFromScript unspentOutputs Redeem
+          tx = Constraints.collectFromTheScript unspentOutputs Redeem
                       <> Constraints.mustValidateIn (Interval.to (Haskell.pred $ deadline params))
                       -- Pay me the output of this script
                       <> Constraints.mustPayToPubKey pk value
@@ -165,7 +164,7 @@ refundEp = endpoint @"refund" refund
     refund params = do
       unspentOutputs <- utxosAt escrowAddress
 
-      let tx = Typed.collectFromScript unspentOutputs Refund
+      let tx = Constraints.collectFromTheScript unspentOutputs Refund
                   <> Constraints.mustValidateIn (Interval.from (deadline params))
 
       if Constraints.modifiesUtxoSet tx

@@ -55,12 +55,11 @@ import Ledger.Tx qualified as Tx
 import Ledger.Typed.Scripts (TypedValidator)
 import Ledger.Typed.Scripts qualified as Scripts
 import Ledger.Value (Value, geq, lt)
-import Plutus.Script.Utils.V1.Scripts qualified as Ledger
+import Plutus.Script.Utils.Scripts qualified as Ledger
 import Plutus.V1.Ledger.Api (Datum (Datum), DatumHash, ValidatorHash)
 import Plutus.V1.Ledger.Contexts (ScriptContext (..), TxInfo (..))
 
 import Plutus.Contract
-import Plutus.Contract.Typed.Tx qualified as Typed
 import PlutusTx qualified
 import PlutusTx.Prelude hiding (Applicative (..), Semigroup (..), check, foldMap)
 
@@ -278,7 +277,7 @@ redeem inst escrow = mapError (review _EscrowError) $ do
     let addr = Scripts.validatorAddress inst
     unspentOutputs <- utxosAt addr
     let
-        tx = Typed.collectFromScript unspentOutputs Redeem
+        tx = Constraints.collectFromTheScript unspentOutputs Redeem
                 <> foldMap mkTx (escrowTargets escrow)
     if foldMap (view Tx.ciTxOutValue) unspentOutputs `lt` targetTotal escrow
        then throwing _RedeemFailed NotEnoughFundsAtAddress
@@ -310,8 +309,8 @@ refund ::
 refund inst _escrow = do
     pk <- ownFirstPaymentPubKeyHash
     unspentOutputs <- utxosAt (Scripts.validatorAddress inst)
-    let flt _ ciTxOut = either id Ledger.datumHash (Tx._ciTxOutDatum ciTxOut) == Ledger.datumHash (Datum (PlutusTx.toBuiltinData pk))
-        tx' = Typed.collectFromScriptFilter flt unspentOutputs Refund
+    let flt _ ciTxOut = fst (Tx._ciTxOutScriptDatum ciTxOut) == Ledger.datumHash (Datum (PlutusTx.toBuiltinData pk))
+        tx' = Constraints.collectFromTheScriptFilter flt unspentOutputs Refund
     if Constraints.modifiesUtxoSet tx'
     then do
         utx <- mkTxConstraints ( Constraints.typedValidatorLookups inst

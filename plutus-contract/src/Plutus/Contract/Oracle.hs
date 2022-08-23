@@ -32,20 +32,22 @@ module Plutus.Contract.Oracle(
   , signObservation'
   ) where
 
+import Cardano.Crypto.Wallet qualified as Crypto (XPrv)
 import Data.Aeson (FromJSON, ToJSON)
 import GHC.Generics (Generic)
 
 import PlutusTx (FromData (fromBuiltinData), ToData (toBuiltinData), makeIsDataIndexed, makeLift)
-import PlutusTx.Prelude (Applicative (pure), Either (Left, Right), Eq ((==)), maybe, trace, unless, verifySignature,
-                         ($), (&&), (>>))
+import PlutusTx.Prelude (Applicative (pure), Either (Left, Right), Eq ((==)), maybe, trace, unless,
+                         verifyEd25519Signature, ($), (&&), (>>))
 
 import Ledger.Address (PaymentPrivateKey (unPaymentPrivateKey), PaymentPubKey (PaymentPubKey))
 import Ledger.Constraints (TxConstraints)
 import Ledger.Constraints qualified as Constraints
-import Ledger.Crypto (Passphrase, PrivateKey, PubKey (..), Signature (..))
+import Ledger.Constraints.OnChain.V1 qualified as Constraints
+import Ledger.Crypto (Passphrase, PubKey (..), Signature (..))
 import Ledger.Crypto qualified as Crypto
 import Ledger.Scripts (Datum (Datum), DatumHash (DatumHash))
-import Plutus.Script.Utils.V1.Scripts qualified as Scripts
+import Plutus.Script.Utils.Scripts qualified as Scripts
 import Plutus.V1.Ledger.Bytes (LedgerBytes (LedgerBytes))
 import Plutus.V1.Ledger.Contexts (ScriptContext)
 import Plutus.V1.Ledger.Time (POSIXTime)
@@ -127,7 +129,7 @@ checkSignature datumHash pubKey signature_ =
     let PaymentPubKey (PubKey (LedgerBytes pk)) = pubKey
         Signature sig = signature_
         DatumHash h = datumHash
-    in if verifySignature pk h sig
+    in if verifyEd25519Signature pk h sig
         then Right ()
         else Left $ SignatureMismatch signature_ pubKey datumHash
 
@@ -218,7 +220,7 @@ signObservation time vl = signMessage Observation{obsValue=vl, obsTime=time}
 
 -- | Encode a message of type @a@ as a @Data@ value and sign the
 --   hash of the datum.
-signMessage' :: ToData a => a -> PrivateKey -> SignedMessage a
+signMessage' :: ToData a => a -> Crypto.XPrv -> SignedMessage a
 signMessage' msg pk =
   let dt = Datum (toBuiltinData msg)
       DatumHash msgHash = Scripts.datumHash dt
@@ -230,7 +232,7 @@ signMessage' msg pk =
         }
 
 -- | Encode an observation of a value of type @a@ that was made at the given time
-signObservation' :: ToData a => POSIXTime -> a -> PrivateKey -> SignedMessage (Observation a)
+signObservation' :: ToData a => POSIXTime -> a -> Crypto.XPrv -> SignedMessage (Observation a)
 signObservation' time vl = signMessage' Observation{obsValue=vl, obsTime=time}
 
 makeLift ''SignedMessage

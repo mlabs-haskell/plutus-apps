@@ -15,24 +15,23 @@ import Ledger.Tx (RedeemerPtr (RedeemerPtr), ScriptTag (Mint), Tx (txMint, txMin
 import Ledger.Tx.CardanoAPI (fromCardanoAddressInEra, makeTransactionBody, toCardanoAddressInEra,
                              toCardanoTxBodyContent)
 import Ledger.Value qualified as Value
-import Plutus.Script.Utils.V1.Scripts (mintingPolicyHash, validatorHash)
+import Plutus.Script.Utils.V1.Scripts qualified as PV1
 import Plutus.Script.Utils.V1.Typed.Scripts.MonetaryPolicies qualified as MPS
 import Plutus.V1.Ledger.Scripts (unitRedeemer)
 
 import Data.Default (def)
 import Data.Map qualified as Map
-import Data.Set qualified as Set
 import Hedgehog (Gen, Property, forAll, property, (===))
 import Hedgehog qualified
 import Hedgehog.Gen qualified as Gen
 import Hedgehog.Range qualified as Range
 import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.Hedgehog (testProperty)
+import Test.Tasty.Hedgehog (testPropertyNamed)
 
 tests :: TestTree
 tests = testGroup "Ledger.CardanoAPI"
-    [ testProperty "Cardano Address -> Plutus Address roundtrip" addressRoundTripSpec
-    , testProperty "Tx conversion retains minting policy scripts" convertMintingTx
+    [ testPropertyNamed "Cardano Address -> Plutus Address roundtrip" "addressRoundTripSpec" addressRoundTripSpec
+    , testPropertyNamed "Tx conversion retains minting policy scripts" "txConversionRetainsMPS" convertMintingTx
     ]
 
 -- | From a cardano address, we should be able to convert it to a plutus address,
@@ -84,12 +83,13 @@ genNetworkMagic = NetworkMagic <$> Gen.word32 Range.constantBounded
 
 convertMintingTx :: Property
 convertMintingTx = property $ do
-  let vHash = validatorHash someValidator
+  let vHash = PV1.validatorHash someValidator
       mps  = MPS.mkForwardingMintingPolicy vHash
-      vL n = Value.singleton (Value.mpsSymbol $ mintingPolicyHash mps) "L" n
+      mpsHash = PV1.mintingPolicyHash mps
+      vL n = Value.singleton (Value.mpsSymbol mpsHash) "L" n
       tx   = mempty
         { txMint = vL 1
-        , txMintScripts = Set.singleton mps
+        , txMintScripts = Map.singleton mpsHash mps
         , txRedeemers = Map.singleton (RedeemerPtr Mint 0) unitRedeemer
         }
       ectx = toCardanoTxBodyContent def [] tx >>= makeTransactionBody mempty

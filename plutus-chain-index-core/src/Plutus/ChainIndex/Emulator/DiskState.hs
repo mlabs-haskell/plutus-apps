@@ -4,6 +4,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TupleSections   #-}
 {-# LANGUAGE TypeFamilies    #-}
+{-# LANGUAGE ViewPatterns    #-}
 {-| The disk state is the part of the chain index that is kept on disk. This
 module defines an in-memory implementation of the disk state which can be
 used in the emulator.
@@ -32,14 +33,14 @@ import Data.Semigroup.Generic (GenericSemigroupMonoid (..))
 import Data.Set (Set)
 import Data.Set qualified as Set
 import GHC.Generics (Generic)
-import Ledger (Address (..), TxOut (..), TxOutRef)
+import Ledger.Ada qualified as Ada
 import Ledger.Credential (Credential)
-import Ledger.TxId (TxId)
-import Plutus.ChainIndex.Tx (ChainIndexTx (..), citxData, citxRedeemers, citxScripts, citxTxId, txOutsWithRef)
+import Plutus.ChainIndex.Tx (ChainIndexTx, ChainIndexTxOut (..), citxData, citxScripts, citxTxId, txOutsWithRef,
+                             txRedeemersWithHash)
 import Plutus.ChainIndex.Types (Diagnostics (..))
-import Plutus.V1.Ledger.Ada qualified as Ada
-import Plutus.V1.Ledger.Api (Datum, DatumHash, Redeemer, RedeemerHash)
-import Plutus.V1.Ledger.Scripts (Script, ScriptHash)
+import Plutus.V1.Ledger.Api (Address (Address, addressCredential), Datum, DatumHash, Redeemer, RedeemerHash, Script,
+                             TxId, TxOutRef)
+import Plutus.V1.Ledger.Scripts (ScriptHash)
 import Plutus.V1.Ledger.Value (AssetClass (AssetClass), flattenValue)
 
 -- | Set of transaction output references for each address.
@@ -69,7 +70,7 @@ instance Monoid CredentialMap where
 -- | Convert the outputs of the transaction into a 'CredentialMap'.
 txCredentialMap :: ChainIndexTx -> CredentialMap
 txCredentialMap  =
-    let credential TxOut{txOutAddress=Address{addressCredential}} = addressCredential
+    let credential ChainIndexTxOut{citoAddress=Address{addressCredential}} = addressCredential
     in CredentialMap
        . Map.fromListWith (<>)
        . fmap (bimap credential Set.singleton)
@@ -110,11 +111,11 @@ txAssetClassMap =
           fmap (, Set.singleton txOutRef) $ assetClassesOfTxOut txOut)
       . txOutsWithRef
   where
-    assetClassesOfTxOut :: TxOut -> [AssetClass]
-    assetClassesOfTxOut TxOut { txOutValue } =
+    assetClassesOfTxOut :: ChainIndexTxOut -> [AssetClass]
+    assetClassesOfTxOut ChainIndexTxOut{citoValue} =
       fmap (\(c, t, _) -> AssetClass (c, t))
            $ filter (\(c, t, _) -> not $ c == Ada.adaSymbol && t == Ada.adaToken)
-           $ flattenValue txOutValue
+           $ flattenValue citoValue
 
 -- | Data that we keep on disk. (This type is used for testing only - we need
 --   other structures for the disk-backed storage)
@@ -139,7 +140,7 @@ fromTx tx =
         { _DataMap = view citxData tx
         , _ScriptMap = view citxScripts tx
         , _TxMap = Map.singleton (view citxTxId tx) tx
-        , _RedeemerMap = view citxRedeemers tx
+        , _RedeemerMap = txRedeemersWithHash tx
         , _AddressMap = txCredentialMap tx
         , _AssetClassMap = txAssetClassMap tx
         }
@@ -152,6 +153,7 @@ diagnostics DiskState{_DataMap, _ScriptMap, _TxMap, _RedeemerMap, _AddressMap, _
         , numAddresses = toInteger $ Map.size $ _unCredentialMap _AddressMap
         , numAssetClasses = toInteger $ Map.size $ _unAssetClassMap _AssetClassMap
         , someTransactions = take 10 $ fmap fst $ Map.toList _TxMap
+        , unspentTxOuts = []
         -- These 2 are filled in Handlers.hs
         , numUnmatchedInputs = 0
         , numUnspentOutputs = 0

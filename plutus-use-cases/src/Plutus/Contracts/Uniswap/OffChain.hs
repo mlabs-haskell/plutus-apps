@@ -42,7 +42,8 @@ import Data.Monoid (Last (..))
 import Data.Proxy (Proxy (..))
 import Data.Text (Text, pack)
 import Data.Void (Void, absurd)
-import Ledger hiding (singleton)
+import Ledger (ChainIndexTxOut (PublicKeyChainIndexTxOut, ScriptChainIndexTxOut, _ciTxOutScriptDatum), ciTxOutValue,
+               pubKeyHashAddress)
 import Ledger.Constraints as Constraints hiding (adjustUnbalancedTx)
 import Ledger.Typed.Scripts qualified as Scripts
 import Playground.Contract
@@ -52,9 +53,11 @@ import Plutus.Contracts.Currency qualified as Currency
 import Plutus.Contracts.Uniswap.OnChain (mkUniswapValidator, validateLiquidityMinting)
 import Plutus.Contracts.Uniswap.Pool
 import Plutus.Contracts.Uniswap.Types
+import Plutus.Script.Utils.V1.Address (mkValidatorAddress)
 import Plutus.Script.Utils.V1.Scripts (scriptCurrencySymbol)
-import Plutus.V1.Ledger.Scripts (Datum (Datum), DatumHash, MintingPolicy, Redeemer (Redeemer), Validator,
-                                 mkMintingPolicyScript)
+import Plutus.V1.Ledger.Api (Address, CurrencySymbol, Datum (Datum), DatumHash, MintingPolicy, Redeemer (Redeemer),
+                             ScriptContext, Validator, Value)
+import Plutus.V1.Ledger.Scripts (mkMintingPolicyScript)
 import PlutusTx qualified
 import PlutusTx.Code
 import PlutusTx.Coverage
@@ -112,8 +115,8 @@ uniswapInstance us = Scripts.mkTypedValidator @Uniswapping
 uniswapScript :: Uniswap -> Validator
 uniswapScript = Scripts.validatorScript . uniswapInstance
 
-uniswapAddress :: Uniswap -> Ledger.Address
-uniswapAddress = Ledger.scriptAddress . uniswapScript
+uniswapAddress :: Uniswap -> Address
+uniswapAddress = mkValidatorAddress . uniswapScript
 
 uniswap :: CurrencySymbol -> Uniswap
 uniswap cs = Uniswap $ mkCoin cs uniswapTokenName
@@ -230,8 +233,8 @@ create us CreateParams{..} = do
         lpVal    = valueOf cpCoinA cpAmountA <> valueOf cpCoinB cpAmountB <> unitValue psC
 
         lookups  = Constraints.typedValidatorLookups usInst        <>
-                   Constraints.otherScript usScript                <>
-                   Constraints.mintingPolicy (liquidityPolicy us) <>
+                   Constraints.plutusV1OtherScript usScript                <>
+                   Constraints.plutusV1MintingPolicy (liquidityPolicy us) <>
                    Constraints.unspentOutputs (Map.singleton oref o)
 
         tx       = Constraints.mustPayToTheScript usDat1 usVal                                     <>
@@ -260,8 +263,8 @@ close us CloseParams{..} = do
         redeemer = Redeemer $ PlutusTx.toBuiltinData Close
 
         lookups  = Constraints.typedValidatorLookups usInst        <>
-                   Constraints.otherScript usScript                <>
-                   Constraints.mintingPolicy (liquidityPolicy us) <>
+                   Constraints.plutusV1OtherScript usScript                <>
+                   Constraints.plutusV1MintingPolicy (liquidityPolicy us) <>
                    Constraints.ownPaymentPubKeyHash pkh                   <>
                    Constraints.unspentOutputs (Map.singleton oref1 o1 <> Map.singleton oref2 o2)
 
@@ -296,8 +299,8 @@ remove us RemoveParams{..} = do
         redeemer     = Redeemer $ PlutusTx.toBuiltinData Remove
 
         lookups  = Constraints.typedValidatorLookups usInst          <>
-                   Constraints.otherScript usScript                  <>
-                   Constraints.mintingPolicy (liquidityPolicy us)   <>
+                   Constraints.plutusV1OtherScript usScript                  <>
+                   Constraints.plutusV1MintingPolicy (liquidityPolicy us)   <>
                    Constraints.unspentOutputs (Map.singleton oref o) <>
                    Constraints.ownPaymentPubKeyHash pkh
 
@@ -336,8 +339,8 @@ add us AddParams{..} = do
         redeemer     = Redeemer $ PlutusTx.toBuiltinData Add
 
         lookups  = Constraints.typedValidatorLookups usInst             <>
-                   Constraints.otherScript usScript                     <>
-                   Constraints.mintingPolicy (liquidityPolicy us)       <>
+                   Constraints.plutusV1OtherScript usScript                     <>
+                   Constraints.plutusV1MintingPolicy (liquidityPolicy us)       <>
                    Constraints.ownPaymentPubKeyHash pkh                        <>
                    Constraints.unspentOutputs (Map.singleton oref o)
 
@@ -377,7 +380,7 @@ swap us SwapParams{..} = do
         val     = valueOf spCoinA newA <> valueOf spCoinB newB <> unitValue (poolStateCoin us)
 
         lookups = Constraints.typedValidatorLookups inst                 <>
-                  Constraints.otherScript (Scripts.validatorScript inst) <>
+                  Constraints.plutusV1OtherScript (Scripts.validatorScript inst) <>
                   Constraints.unspentOutputs (Map.singleton oref o)      <>
                   Constraints.ownPaymentPubKeyHash pkh
 
@@ -430,8 +433,8 @@ getUniswapDatum o =
   case o of
       PublicKeyChainIndexTxOut {} ->
         throwError "no datum for a txout of a public key address"
-      ScriptChainIndexTxOut { _ciTxOutDatum } -> do
-        (Datum e) <- either getDatum pure _ciTxOutDatum
+      ScriptChainIndexTxOut { _ciTxOutScriptDatum = (dh, d) } -> do
+        (Datum e) <- maybe (getDatum dh) pure d
         maybe (throwError "datum hash wrong type")
               pure
               (PlutusTx.fromBuiltinData e)

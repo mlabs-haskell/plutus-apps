@@ -58,11 +58,10 @@ import Ledger.Typed.Scripts (DatumType, RedeemerType, ValidatorTypes)
 import Ledger.Typed.Scripts qualified as Scripts hiding (validatorHash)
 import Ledger.Value (TokenName, Value)
 import Ledger.Value qualified as Value
-import Plutus.Contract.Typed.Tx qualified as TypedTx
 import Plutus.Contracts.Currency qualified as Currency
-import Plutus.Script.Utils.V1.Scripts qualified as Scripts
+import Plutus.Script.Utils.V1.Scripts qualified as PV1
 import Plutus.V1.Ledger.Api (Address, ValidatorHash)
-import Plutus.V1.Ledger.Contexts qualified as V
+import Plutus.V1.Ledger.Contexts qualified as PV1
 
 import Prettyprinter.Extras (PrettyShow (PrettyShow))
 
@@ -125,8 +124,8 @@ accountToken :: Account -> Value
 accountToken (Account currency) = Value.assetClassValue currency 1
 
 {-# INLINEABLE validate #-}
-validate :: Account -> () -> () -> V.ScriptContext -> Bool
-validate account _ _ ptx = V.valueSpent (V.scriptContextTxInfo ptx) `Value.geq` accountToken account
+validate :: Account -> () -> () -> PV1.ScriptContext -> Bool
+validate account _ _ ptx = PV1.valueSpent (PV1.scriptContextTxInfo ptx) `Value.geq` accountToken account
 
 typedValidator :: Account -> Scripts.TypedValidator TokenAccount
 typedValidator = Scripts.mkTypedValidatorParam @TokenAccount
@@ -139,7 +138,7 @@ address :: Account -> Address
 address = Scripts.validatorAddress . typedValidator
 
 validatorHash :: Account -> ValidatorHash
-validatorHash = Scripts.validatorHash . Scripts.validatorScript . typedValidator
+validatorHash = PV1.validatorHash . Scripts.validatorScript . typedValidator
 
 -- | A transaction that pays the given value to the account
 payTx
@@ -183,7 +182,7 @@ redeemTx account pk = mapError (review _TAContractError) $ do
             <> show numInputs
             <> " outputs with a total value of "
             <> show totalVal
-    let constraints = TypedTx.collectFromScript utxos ()
+    let constraints = Constraints.collectFromTheScript utxos ()
                 <> Constraints.mustPayToPubKey pk (accountToken account)
         lookups = Constraints.typedValidatorLookups inst
                 <> Constraints.unspentOutputs utxos
