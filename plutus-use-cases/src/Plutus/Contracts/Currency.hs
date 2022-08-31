@@ -69,6 +69,8 @@ data OneShotCurrency = OneShotCurrency
   deriving anyclass (ToJSON, FromJSON)
 
 PlutusTx.makeLift ''OneShotCurrency
+PlutusTx.makeIsDataIndexed ''OneShotCurrency [('OneShotCurrency,0)]
+$(deriveJSON defaultOptions ''OneShotCurrency)
 
 currencyValue :: CurrencySymbol -> OneShotCurrency -> Value
 currencyValue s OneShotCurrency{curAmounts = amts} =
