@@ -26,7 +26,7 @@ module Plutus.Contracts.Currency(
     -- * Simple minting policy currency
     , SimpleMPS(..)
     , mintCurrency
-    , checkPolicy
+    ,checkPolicy
     ) where
 
 import Control.Lens
