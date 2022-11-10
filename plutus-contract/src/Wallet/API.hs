@@ -64,7 +64,6 @@ import Control.Monad (unless, void)
 import Control.Monad.Freer (Eff, Member)
 import Control.Monad.Freer.Error (Error, throwError)
 import Control.Monad.Freer.Extras.Log (LogMsg, logDebug, logWarn)
-import Data.Default (Default (def))
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
@@ -124,11 +123,13 @@ payToPaymentPublicKeyHash ::
     )
     => Params -> SlotRange -> Value -> PaymentPubKeyHash -> Eff effs CardanoTx
 payToPaymentPublicKeyHash params range v pk = do
+    pkh <- ownFirstPaymentPubKeyHash
     let constraints = Constraints.mustPayToPubKey pk v
-                   <> Constraints.mustValidateIn (TimeSlot.slotRangeToPOSIXTimeRange def range)
+                   <> Constraints.mustValidateIn (TimeSlot.slotRangeToPOSIXTimeRange (pSlotConfig params) range)
+                   <> Constraints.mustBeSignedBy pkh
     utx <- either (throwError . PaymentMkTxError)
                   pure
-                  (Constraints.mkTx @Void mempty constraints)
+                  (Constraints.mkTxWithParams @Void params mempty constraints)
     (missingAdaCosts, adjustedUtx) <- either (throwError . ToCardanoError) pure (adjustUnbalancedTx params utx)
     logDebug $ AdjustingUnbalancedTx missingAdaCosts
     unless (utx == adjustedUtx) $

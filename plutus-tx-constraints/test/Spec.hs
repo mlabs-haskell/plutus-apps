@@ -7,14 +7,14 @@ module Main(main) where
 
 import Cardano.Api qualified as C
 import Cardano.Api.Shelley qualified as C
-import Control.Lens (toListOf, view)
+import Control.Lens (preview, toListOf, view)
 import Control.Monad (forM_, guard, replicateM, void)
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Reader (ask)
 import Data.ByteString qualified as BS
 import Data.Default (def)
 import Data.Map qualified as Map
-import Data.Maybe (mapMaybe)
+import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Void (Void)
 import Hedgehog (Property, annotateShow, forAll, property, (===))
 import Hedgehog qualified
@@ -27,7 +27,7 @@ import Ledger.Address (StakePubKeyHash (StakePubKeyHash), addressStakingCredenti
 import Ledger.Credential (Credential (PubKeyCredential, ScriptCredential), StakingCredential (StakingHash))
 import Ledger.Crypto (PubKeyHash (PubKeyHash))
 import Ledger.Generators qualified as Gen
-import Ledger.Tx (Tx (txOutputs), TxOut (TxOut, txOutAddress))
+import Ledger.Tx (Tx (txOutputs), TxOut (TxOut), txOutAddress)
 import Ledger.Tx.CardanoAPI qualified as C
 import Ledger.Tx.Constraints as Constraints
 import Ledger.Tx.Constraints.OffChain qualified as OC
@@ -91,19 +91,20 @@ mustPayToPubKeyAddressStakePubKeyNotNothingProp = property $ do
             Hedgehog.annotateShow err
             Hedgehog.failure
         Right utx -> do
-            let tx = either id (error "Unexpected enulator tx") (OC.unBalancedTxTx utx)
-            let outputs = view OC.txOuts tx
-            let stakingCreds = mapMaybe stakePaymentPubKeyHash outputs
+            let tx = fromMaybe (error "Unexpected emulator tx") (preview OC.tx utx)
+                outputs = view OC.txOuts tx
+                stakingCreds = mapMaybe stakePaymentPubKeyHash outputs
             Hedgehog.assert $ not $ null stakingCreds
             forM_ stakingCreds ((===) skh)
     where
-        stakePaymentPubKeyHash :: C.TxOut C.CtxTx C.AlonzoEra -> Maybe StakePubKeyHash
+        stakePaymentPubKeyHash :: C.TxOut C.CtxTx C.BabbageEra -> Maybe StakePubKeyHash
         stakePaymentPubKeyHash (C.TxOut addr _ _ _) = do
-            txOutAddress <- either (const Nothing) Just $ C.fromCardanoAddressInEra addr
+            let txOutAddress = C.fromCardanoAddressInEra addr
             stakeCred <- addressStakingCredential txOutAddress
             case stakeCred of
                 StakingHash (PubKeyCredential pkh) -> Just $ StakePubKeyHash pkh
                 _                                  -> Nothing
+
 
 -- txOut0 :: Ledger.ChainIndexTxOut
 -- txOut0 = Ledger.ScriptChainIndexTxOut (Ledger.Address (ScriptCredential alwaysSucceedValidatorHash) Nothing) (Left alwaysSucceedValidatorHash) (Right Ledger.unitDatum) mempty
@@ -157,8 +158,8 @@ mustPayToPubKeyAddressStakePubKeyNotNothingProp = property $ do
 -- lookups1 :: ScriptLookups UnitTest
 -- lookups1
 --     = Constraints.unspentOutputs utxo1
---     <> Constraints.otherScript (Scripts.validatorScript alwaysSucceedValidator)
---     <> Constraints.otherScript (Scripts.validatorScript validator1)
+--     <> Constraints.plutusV1OtherScript (Scripts.validatorScript alwaysSucceedValidator)
+--     <> Constraints.plutusV1OtherScript (Scripts.validatorScript validator1)
 
 -- testMustSpendScriptOutputWithMatchingDatumAndValue :: Property
 -- testMustSpendScriptOutputWithMatchingDatumAndValue = testScriptInputs lookups1 (constraints1 alwaysSucceedValidatorHash)

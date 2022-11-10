@@ -35,7 +35,6 @@ import Ledger.Value (Value, geq)
 import Plutus.V1.Ledger.Api (ScriptContext (..), TxInfo (..))
 
 import Plutus.Contract
-import Plutus.Contract.Typed.Tx qualified as Typed
 import PlutusTx qualified
 import PlutusTx.Prelude hiding (Applicative (..), Semigroup (..), check, foldMap)
 
@@ -126,8 +125,13 @@ validate params action ScriptContext{scriptContextTxInfo=txInfo} =
 -- requirement that the transaction validates before the 'deadline'.
 lockEp :: Promise () EscrowSchema EscrowError ()
 lockEp = endpoint @"lock" $ \params -> do
-  let valRange = Interval.to (Haskell.pred $ deadline params)
-      tx = Constraints.mustPayToTheScript params (paying params)
+  -- Correct validity interval should be:
+  -- @
+  --   Interval (LowerBound NegInf True) (Interval.strictUpperBound $ deadline params)
+  -- @
+  -- See Note [Validity Interval's upper bound]
+  let valRange = Interval.to (Haskell.pred $ Haskell.pred $ deadline params)
+      tx = Constraints.mustPayToTheScriptWithDatumInTx params (paying params)
             <> Constraints.mustValidateIn valRange
   void $ mkTxConstraints (Constraints.typedValidatorLookups escrowInstance) tx
          >>= adjustUnbalancedTx >>= submitUnbalancedTx
@@ -138,13 +142,19 @@ redeemEp :: Promise () EscrowSchema EscrowError RedeemSuccess
 redeemEp = endpoint @"redeem" redeem
   where
     redeem params = do
-      time <- currentTime
+      time <- snd <$> currentNodeClientTimeRange
       pk <- ownFirstPaymentPubKeyHash
       unspentOutputs <- utxosAt escrowAddress
 
-      let value = foldMap (view Tx.ciTxOutValue) unspentOutputs
-          tx = Typed.collectFromScript unspentOutputs Redeem
-                      <> Constraints.mustValidateIn (Interval.to (Haskell.pred $ deadline params))
+      let value = foldMap (view Tx.decoratedTxOutValue) unspentOutputs
+          -- Correct validity interval should be:
+          -- @
+          --   Interval (LowerBound NegInf True) (Interval.strictUpperBound $ deadline params)
+          -- @
+          -- See Note [Validity Interval's upper bound]
+          validityTimeRange = Interval.to (Haskell.pred $ Haskell.pred $ deadline params)
+          tx = Constraints.collectFromTheScript unspentOutputs Redeem
+                      <> Constraints.mustValidateIn validityTimeRange
                       -- Pay me the output of this script
                       <> Constraints.mustPayToPubKey pk value
                       -- Pay the payee their due
@@ -165,8 +175,9 @@ refundEp = endpoint @"refund" refund
     refund params = do
       unspentOutputs <- utxosAt escrowAddress
 
-      let tx = Typed.collectFromScript unspentOutputs Refund
+      let tx = Constraints.collectFromTheScript unspentOutputs Refund
                   <> Constraints.mustValidateIn (Interval.from (deadline params))
+                  <> Constraints.mustBeSignedBy (payee params)
 
       if Constraints.modifiesUtxoSet tx
       then do

@@ -26,7 +26,7 @@ import GHC.Generics (Generic)
 import Ledger hiding (initialise, to)
 import Ledger.Typed.Scripts (TypedValidator)
 import Ledger.Typed.Scripts qualified as Scripts
-import Plutus.V1.Ledger.Contexts as V
+import Plutus.V1.Ledger.Contexts qualified as V
 import PlutusTx qualified
 
 import Ledger.Constraints qualified as Constraints
@@ -69,11 +69,11 @@ pubKeyContract
     )
     => PaymentPubKeyHash
     -> Value
-    -> Contract w s e (TxOutRef, Maybe ChainIndexTxOut, TypedValidator PubKeyContract)
+    -> Contract w s e (TxOutRef, Maybe DecoratedTxOut, TypedValidator PubKeyContract)
 pubKeyContract pk vl = mapError (review _PubKeyError   ) $ do
     let inst = typedValidator pk
         address = Scripts.validatorAddress inst
-        tx = Constraints.mustPayToTheScript () vl
+        tx = Constraints.mustPayToTheScriptWithDatumInTx () vl
 
     ledgerTx <- mkTxConstraints (Constraints.typedValidatorLookups inst) tx
         >>= adjustUnbalancedTx >>= submitUnbalancedTx
@@ -81,7 +81,7 @@ pubKeyContract pk vl = mapError (review _PubKeyError   ) $ do
     _ <- awaitTxConfirmed (getCardanoTxId ledgerTx)
     let refs = Map.keys
                $ Map.filter ((==) address . txOutAddress)
-               $ getCardanoTxUnspentOutputsTx ledgerTx
+               $ getCardanoTxProducedOutputs ledgerTx
 
     case refs of
         []                   -> throwing _ScriptOutputMissing pk
@@ -105,7 +105,7 @@ pubKeyContract pk vl = mapError (review _PubKeyError   ) $ do
             -- The 'awaitChainIndexSlot' blocks the contract until the chain-index
             -- is synced until the current slot. This is not a good solution,
             -- as the chain-index is always some time behind the current slot.
-            slot <- currentSlot
+            slot <- currentNodeClientSlot
             awaitChainIndexSlot slot
 
             ciTxOut <- unspentTxOutFromRef outRef

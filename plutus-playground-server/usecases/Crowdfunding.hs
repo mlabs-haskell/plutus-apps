@@ -35,7 +35,6 @@ import Ledger.Value (Value)
 import Playground.Contract
 import Plutus.Contract
 import Plutus.Contract.Constraints qualified as Constraints
-import Plutus.Contract.Typed.Tx qualified as Typed
 import Plutus.Script.Utils.V1.Scripts qualified as PV1
 import Plutus.V1.Ledger.Contexts qualified as PV1
 import PlutusTx qualified
@@ -89,7 +88,8 @@ mkCampaign ddl collectionDdl ownerWallet =
 -- | The 'POSIXTimeRange' during which the funds can be collected
 collectionRange :: Campaign -> POSIXTimeRange
 collectionRange cmp =
-    Interval.interval (campaignDeadline cmp) (campaignCollectionDeadline cmp - 1)
+    -- We have to subtract '2', see Note [Validity Interval's upper bound]
+    Interval.interval (campaignDeadline cmp) (campaignCollectionDeadline cmp - 2)
 
 -- | The 'POSIXTimeRange' during which a refund may be claimed
 refundRange :: Campaign -> POSIXTimeRange
@@ -165,7 +165,7 @@ contribute :: AsContractError e => Campaign -> Promise () CrowdfundingSchema e (
 contribute cmp = endpoint @"contribute" $ \Contribution{contribValue} -> do
     contributor <- ownFirstPaymentPubKeyHash
     let inst = typedValidator cmp
-        tx = Constraints.mustPayToTheScript contributor contribValue
+        tx = Constraints.mustPayToTheScriptWithDatumInTx contributor contribValue
                 <> Constraints.mustValidateIn (Interval.to (campaignDeadline cmp))
     txid <- fmap getCardanoTxId $ mkTxConstraints (Constraints.typedValidatorLookups inst) tx
         >>= adjustUnbalancedTx >>= submitUnbalancedTx
@@ -177,7 +177,7 @@ contribute cmp = endpoint @"contribute" $ \Contribution{contribValue} -> do
     -- then we can claim a refund.
 
     let flt Ledger.TxOutRef{txOutRefId} _ = txid Haskell.== txOutRefId
-        tx' = Typed.collectFromScriptFilter flt utxo Refund
+        tx' = Constraints.collectFromTheScriptFilter flt utxo Refund
                 <> Constraints.mustValidateIn (refundRange cmp)
                 <> Constraints.mustBeSignedBy contributor
     if Constraints.modifiesUtxoSet tx'
@@ -202,7 +202,8 @@ scheduleCollection cmp =
         _ <- awaitTime $ campaignDeadline cmp
         unspentOutputs <- utxosAt (Scripts.validatorAddress inst)
 
-        let tx = Typed.collectFromScript unspentOutputs Collect
+        let tx = Constraints.collectFromTheScript unspentOutputs Collect
+                <> Constraints.mustBeSignedBy (campaignOwner cmp)
                 <> Constraints.mustValidateIn (collectionRange cmp)
         void $ submitTxConstraintsSpending inst unspentOutputs tx
 

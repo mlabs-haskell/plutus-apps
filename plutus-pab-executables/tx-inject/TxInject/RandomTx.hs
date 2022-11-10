@@ -14,7 +14,6 @@ import Data.Default (def)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Map qualified as Map
 import Data.Maybe (fromMaybe)
-import Data.Set qualified as Set
 import Hedgehog.Gen qualified as Gen
 import System.Random.MWC as MWC
 
@@ -22,12 +21,13 @@ import Ledger.Ada qualified as Ada
 import Ledger.Address (PaymentPrivateKey, PaymentPubKey)
 import Ledger.Address qualified as Address
 import Ledger.CardanoWallet qualified as CW
+import Ledger.Generators (TxInputWitnessed (TxInputWitnessed))
 import Ledger.Generators qualified as Generators
-import Ledger.Index (UtxoIndex (..), ValidationCtx (..), runValidation, validateTransaction)
+import Ledger.Index (UtxoIndex (..))
 import Ledger.Params (Params (pSlotConfig))
 import Ledger.Slot (Slot (..))
-import Ledger.Tx (Tx, TxOut (..))
-import Ledger.Tx qualified as Tx
+import Ledger.Tx (CardanoTx (EmulatorTx), Tx, TxInType (ConsumePublicKeyAddress), txOutAddress, txOutValue)
+import Ledger.Validation qualified as Validation
 
 -- $randomTx
 -- Generate a random, valid transaction that moves some ada
@@ -66,12 +66,12 @@ generateTx gen slot (UtxoIndex utxo) = do
   -- We definitely need this for creating multi currency transactions!
         =
           filter
-            (\(_, TxOut {txOutValue}) ->
-                txOutValue ==
-                  Ada.toValue (Ada.fromValue txOutValue)) $
+            (\(_, txOut ) ->
+                txOutValue txOut ==
+                  Ada.toValue (Ada.fromValue $ txOutValue txOut)) $
           filter
-            (\(_, TxOut {txOutAddress}) ->
-                txOutAddress == sourceAddress) $
+            (\(_, txOut) ->
+                txOutAddress txOut == sourceAddress) $
           Map.toList utxo
   -- list of inputs owned by 'sourcePrivKey' that we are going to spend
   -- in the transaction
@@ -85,15 +85,18 @@ generateTx gen slot (UtxoIndex utxo) = do
             (txOutValue . snd)
             inputs
         -- inputs of the transaction
-        sourceTxIns = Set.fromList $ fmap (Tx.pubKeyTxIn . fst) inputs
-    tx <- Gen.sample $
+        sourceTxIns = fmap ((`TxInputWitnessed` ConsumePublicKeyAddress) . fst) inputs
+    EmulatorTx tx <- Gen.sample $
       Generators.genValidTransactionSpending sourceTxIns sourceAda
     slotCfg <- Gen.sample Generators.genSlotConfig
-    let (validationResult, _) =
-          runValidation (validateTransaction slot tx) (ValidationCtx (UtxoIndex utxo) (def { pSlotConfig = slotCfg }))
+    let
+      params = def { pSlotConfig = slotCfg }
+      utxoIndex = either (error . show) id $ Validation.fromPlutusIndex $ UtxoIndex utxo
+      txn = Validation.fromPlutusTxSigned params utxoIndex tx CW.knownPaymentKeys
+      validationResult = Validation.validateCardanoTx params slot utxoIndex txn
     case validationResult of
-      Nothing -> pure tx
-      Just  _ -> generateTx gen slot (UtxoIndex utxo)
+      Left _  -> pure tx
+      Right _ -> generateTx gen slot (UtxoIndex utxo)
 
 keyPairs :: NonEmpty (PaymentPrivateKey, PaymentPubKey)
 keyPairs =

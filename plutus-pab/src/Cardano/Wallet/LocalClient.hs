@@ -7,6 +7,8 @@
 {-# LANGUAGE TypeApplications  #-}
 {-# LANGUAGE TypeOperators     #-}
 
+{-# OPTIONS_GHC -Wno-deprecations #-} -- TODO Remove once TotalFunds gets removed
+
 module Cardano.Wallet.LocalClient where
 
 import Cardano.Api qualified
@@ -114,11 +116,8 @@ handleWalletClient config (Wallet _ (WalletId walletId)) event = do
              fromApiAddress :: Text -> Maybe Address
              fromApiAddress addrBech32 = do
                  case Cardano.Api.deserialiseFromBech32 (Cardano.Api.AsAddress Cardano.Api.AsShelleyAddr) addrBech32 of
-                   Left _ -> Nothing
-                   Right addrCApi -> do
-                       case fromCardanoAddress addrCApi of
-                         Left _     -> Nothing
-                         Right addr -> Just addr
+                   Left _         -> Nothing
+                   Right addrCApi -> Just $ fromCardanoAddress addrCApi
 
         balanceTxH :: UnbalancedTx -> Eff effs (Either WalletAPIError CardanoTx)
         balanceTxH utx = do
@@ -168,7 +167,7 @@ tokenMapToValue :: C.TokenMap -> Value
 tokenMapToValue = Value . Map.fromList . fmap (bimap (currencySymbol . C.getHash . C.unTokenPolicyId) (Map.fromList . fmap (bimap (tokenName . C.unTokenName) (fromIntegral . C.unTokenQuantity)) . toList)) . C.toNestedList
 
 fromApiSerialisedTransaction :: C.ApiSerialisedTransaction -> CardanoTx
-fromApiSerialisedTransaction (C.ApiSerialisedTransaction (C.ApiT sealedTx)) = CardanoApiTx $ case C.cardanoTx sealedTx of
+fromApiSerialisedTransaction (C.ApiSerialisedTransaction (C.ApiT sealedTx)) = CardanoApiTx $ case C.cardanoTxIdeallyNoLaterThan (Cardano.Api.anyCardanoEra Cardano.Api.BabbageEra) sealedTx of
     Cardano.Api.InAnyCardanoEra Cardano.Api.ByronEra tx   -> SomeTx tx Cardano.Api.ByronEraInCardanoMode
     Cardano.Api.InAnyCardanoEra Cardano.Api.ShelleyEra tx -> SomeTx tx Cardano.Api.ShelleyEraInCardanoMode
     Cardano.Api.InAnyCardanoEra Cardano.Api.AllegraEra tx -> SomeTx tx Cardano.Api.AllegraEraInCardanoMode
@@ -184,7 +183,6 @@ toSealedTx _ (CardanoApiTx (SomeTx tx Cardano.Api.MaryEraInCardanoMode)) = Right
 toSealedTx _ (CardanoApiTx (SomeTx tx Cardano.Api.AlonzoEraInCardanoMode)) = Right $ C.sealedTxFromCardano $ Cardano.Api.InAnyCardanoEra Cardano.Api.AlonzoEra tx
 toSealedTx _ (CardanoApiTx (SomeTx tx Cardano.Api.BabbageEraInCardanoMode)) = Right $ C.sealedTxFromCardano $ Cardano.Api.InAnyCardanoEra Cardano.Api.BabbageEra tx
 toSealedTx params (EmulatorTx tx) = C.sealedTxFromCardanoBody <$> toCardanoTxBody params [] tx
-toSealedTx params (Both tx _) = C.sealedTxFromCardanoBody <$> toCardanoTxBody params [] tx
 
 throwOtherError :: (Member (Error WalletAPIError) effs, Show err) => err -> Eff effs a
 throwOtherError = throwError . OtherError . pack . show

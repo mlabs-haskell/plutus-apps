@@ -74,8 +74,6 @@ library
     Plutus.Contract.StateMachine.ThreadToken
     Plutus.Contract.Trace
     Plutus.Contract.Trace.RequestHandler
-    Plutus.Contract.Tx
-    Plutus.Contract.Typed.Tx
     Plutus.Contract.Types
     Plutus.Contract.Util
     Plutus.Contract.Wallet
@@ -131,13 +129,14 @@ library
   -- Other IOG dependencies
   --------------------------
   build-depends:
-    , cardano-api          >=1.35
+    , cardano-api            >=1.35
     , cardano-crypto
+    , cardano-ledger-alonzo
     , cardano-ledger-core
     , cardano-wallet-core
-    , plutus-core          >=1.0.0
-    , plutus-ledger-api    >=1.0.0
-    , plutus-tx            >=1.0.0
+    , plutus-core            >=1.0.0
+    , plutus-ledger-api      >=1.0.0
+    , plutus-tx              >=1.0.0
     , quickcheck-dynamic
 
   if !(impl(ghcjs) || os(ghcjs))
@@ -156,6 +155,7 @@ library
     , data-default
     , deepseq
     , directory
+    , either
     , filepath
     , flat
     , foldl
@@ -236,6 +236,19 @@ test-suite plutus-contract-test
   other-modules:
     Spec.Balancing
     Spec.Contract
+    Spec.Contract.Tx.Constraints.MustIncludeDatum
+    Spec.Contract.Tx.Constraints.MustMint
+    Spec.Contract.Tx.Constraints.MustPayToOtherScript
+    Spec.Contract.Tx.Constraints.MustPayToPubKeyAddress
+    Spec.Contract.Tx.Constraints.MustProduceAtLeast
+    Spec.Contract.Tx.Constraints.MustReferenceOutput
+    Spec.Contract.Tx.Constraints.MustSatisfyAnyOf
+    Spec.Contract.Tx.Constraints.MustSpendAtLeast
+    Spec.Contract.Tx.Constraints.MustSpendPubKeyOutput
+    Spec.Contract.Tx.Constraints.MustSpendScriptOutput
+    Spec.Contract.Tx.Constraints.RequiredSigner
+    Spec.Contract.Tx.Constraints.Spec
+    Spec.Contract.Tx.Constraints.TimeValidity
     Spec.Emulator
     Spec.ErrorChecking
     Spec.Plutus.Contract.Oracle
@@ -244,7 +257,6 @@ test-suite plutus-contract-test
     Spec.Secrets
     Spec.State
     Spec.ThreadToken
-    Spec.TimeValidity
 
   --------------------
   -- Local components

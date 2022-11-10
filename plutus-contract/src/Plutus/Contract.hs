@@ -26,10 +26,14 @@ module Plutus.Contract(
     , Request.awaitSlot
     , Request.isSlot
     , Request.currentSlot
+    , Request.currentPABSlot
+    , Request.currentNodeClientSlot
+    , Request.currentChainIndexSlot
     , Request.waitNSlots
     , Request.awaitTime
     , Request.isTime
     , Request.currentTime
+    , Request.currentNodeClientTimeRange
     , Request.waitNMilliSeconds
     -- * Endpoints
     , Request.HasEndpoint
@@ -50,6 +54,7 @@ module Plutus.Contract(
     , Request.utxoIsProduced
     -- * Chain index requests
     , Request.datumFromHash
+    , Request.datumsAt
     , Request.validatorFromHash
     , Request.mintingPolicyFromHash
     , Request.stakeValidatorFromHash
@@ -67,6 +72,7 @@ module Plutus.Contract(
     , Request.ownPaymentPubKeyHashes
     , Request.ownFirstPaymentPubKeyHash
     , Request.ownAddresses
+    , Request.ownAddress
     , Request.ownUtxos
     -- * Contract instance Id
     , Wallet.Types.ContractInstanceId
@@ -86,14 +92,14 @@ module Plutus.Contract(
     , Request.balanceTx
     , Request.mkTxConstraints
     , Request.yieldUnbalancedTx
-    -- ** Creating transactions
-    , module Tx
     -- ** Tx confirmation
     , Request.awaitTxConfirmed
     , Request.awaitTxStatusChange
     , Request.isTxConfirmed
     -- ** Tx output confirmation
     , Request.awaitTxOutStatusChange
+    -- * Parameters
+    , Request.getParams
     -- * Checkpoints
     , Plutus.Contract.Types.checkpoint
     , Plutus.Contract.Types.checkpointLoop
@@ -114,7 +120,6 @@ import Plutus.Contract.Logging as Logging
 import Plutus.Contract.Request (ContractRow)
 import Plutus.Contract.Request qualified as Request
 import Plutus.Contract.Schema qualified as Schema
-import Plutus.Contract.Typed.Tx as Tx (collectFromScript, collectFromScriptFilter)
 import Plutus.Contract.Types (Contract (Contract), Promise, select)
 import Plutus.Contract.Types qualified
 

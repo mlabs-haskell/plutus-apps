@@ -5,14 +5,13 @@
 {-# LANGUAGE NumericUnderscores #-}
 module Main(main) where
 
-import Control.Monad (forM_)
+import Cardano.Api qualified as Api
+import Cardano.Crypto.Hash qualified as Crypto
 import Data.Aeson qualified as JSON
 import Data.Aeson.Extras qualified as JSON
 import Data.Aeson.Internal qualified as Aeson
 import Data.ByteString.Lazy qualified as BSL
 import Data.List (sort)
-import Data.Map qualified as Map
-import Data.Maybe (fromJust)
 import Data.String (IsString (fromString))
 import Hedgehog (Property, forAll, property)
 import Hedgehog qualified
@@ -28,6 +27,7 @@ import Ledger.Interval qualified as Interval
 import Ledger.TimeSlot (SlotConfig (..))
 import Ledger.TimeSlot qualified as TimeSlot
 import Ledger.Tx qualified as Tx
+import Ledger.Tx.CardanoAPI qualified as CardanoAPI
 import Ledger.Tx.CardanoAPISpec qualified
 import Ledger.Value qualified as Value
 import PlutusTx.Prelude qualified as PlutusTx
@@ -78,9 +78,9 @@ tests = testGroup "all tests" [
                     vlJson = "{\"getValue\":[[{\"unCurrencySymbol\":\"\"},[[{\"unTokenName\":\"\"},50]]]]}"
                     vlValue = Ada.lovelaceValueOf 50
                 in byteStringJson vlJson vlValue)),
-    testGroup "Tx" [
-        testPropertyNamed "TxOut fromTxOut/toTxOut" "ciTxOutRoundTrip" ciTxOutRoundTrip
-        ],
+    testGroup "TxIn" [
+        testPropertyNamed "Check that Ord instances of TxIn match" "txInOrdInstanceEquivalenceTest" txInOrdInstanceEquivalenceTest
+    ],
     testGroup "TimeSlot" [
         testPropertyNamed "time range of starting slot" "initialSlotToTimeProp," initialSlotToTimeProp,
         testPropertyNamed "slot of starting time range" "initialTimeToSlotProp," initialTimeToSlotProp,
@@ -224,13 +224,6 @@ byteStringJson jsonString value =
     , testCase "encoding" $ HUnit.assertEqual "Simple Encode" jsonString (JSON.encode value)
     ]
 
--- | Validate inverse property between 'fromTxOut' and 'toTxOut given a 'TxOut'.
-ciTxOutRoundTrip :: Property
-ciTxOutRoundTrip = property $ do
-  txOuts <- Map.elems . Gen.mockchainUtxo <$> forAll Gen.genMockchain
-  forM_ txOuts $ \txOut -> do
-    Hedgehog.assert $ Tx.toTxOut (fromJust $ Tx.fromTxOut txOut) == txOut
-
 -- | Asserting that time range of 'scSlotZeroTime' to 'scSlotZeroTime + scSlotLength'
 -- is 'Slot 0' and the time after that is 'Slot 1'.
 initialSlotToTimeProp :: Property
@@ -322,3 +315,17 @@ signAndVerifyTest = property $ do
     pubKey = Ledger.toPublicKey privKey
   payload <- forAll $ Gen.bytes $ Range.singleton 128
   Hedgehog.assert $ (\x -> Ledger.signedBy x pubKey payload) $ Ledger.sign payload privKey pass
+
+-- | Check that Ord instances of cardano-api's 'TxIn' and plutus-ledger-api's 'TxIn' match.
+txInOrdInstanceEquivalenceTest :: Property
+txInOrdInstanceEquivalenceTest = property $ do
+    txIns <- sort <$> forAll (Gen.list (Range.singleton 10) genTxIn)
+    let toPlutus = map ((`Tx.TxIn` Nothing) . CardanoAPI.fromCardanoTxIn)
+    let plutusTxIns = sort $ toPlutus txIns
+    Hedgehog.assert $ toPlutus txIns == plutusTxIns
+
+genTxIn :: Hedgehog.MonadGen m => m Api.TxIn
+genTxIn = do
+    txId <- (\t -> Api.TxId $ Crypto.castHash $ Crypto.hashWith (const t) ()) <$> Gen.utf8 (Range.singleton 5) Gen.unicode
+    txIx <- Api.TxIx <$> Gen.integral (Range.linear 0 maxBound)
+    return $ Api.TxIn txId txIx

@@ -27,8 +27,7 @@ import Cardano.BM.Data.Trace (Trace)
 import Cardano.ChainIndex.Server qualified as ChainIndex
 import Cardano.Node.Params qualified as Params
 import Cardano.Node.Server qualified as NodeServer
-import Cardano.Node.Types (NodeMode (AlonzoNode, MockNode), PABServerConfig (pscNetworkId, pscNodeMode, pscSocketPath),
-                           _AlonzoNode)
+import Cardano.Node.Types (NodeMode (MockNode), PABServerConfig (pscNetworkId, pscNodeMode, pscSocketPath), _AlonzoNode)
 import Cardano.Protocol.Socket.Type (epochSlots)
 import Cardano.Wallet.Mock.Server qualified as WalletServer
 import Cardano.Wallet.Mock.Types (WalletMsg)
@@ -58,6 +57,7 @@ import Data.Time.Units (Second)
 import Plutus.Contract.Resumable (responses)
 import Plutus.Contract.State (State (State, record))
 import Plutus.Contract.State qualified as State
+import Plutus.PAB.App (StorageBackend (..))
 import Plutus.PAB.App qualified as App
 import Plutus.PAB.Core qualified as Core
 import Plutus.PAB.Core.ContractInstance (ContractInstanceState (ContractInstanceState), updateState)
@@ -67,8 +67,8 @@ import Plutus.PAB.Effects.Contract qualified as Contract
 import Plutus.PAB.Effects.Contract.Builtin (Builtin, BuiltinHandler, HasDefinitions, SomeBuiltinState, getResponse)
 import Plutus.PAB.Monitoring.Monitoring qualified as LM
 import Plutus.PAB.Run.Command (ConfigCommand (ChainIndex, ContractState, ForkCommands, Migrate, MockWallet, PABWebserver, ReportActiveContracts, ReportAvailableContracts, ReportContractHistory, StartNode))
-import Plutus.PAB.Types (Config (Config, dbConfig, pabWebserverConfig), chainIndexConfig, nodeServerConfig,
-                         walletServerConfig)
+import Plutus.PAB.Types (ChainQueryConfig (..), Config (Config, dbConfig, pabWebserverConfig), chainQueryConfig,
+                         nodeServerConfig, walletServerConfig)
 import Plutus.PAB.Webserver.Server qualified as PABServer
 import Plutus.PAB.Webserver.Types (ContractActivationArgs (ContractActivationArgs, caID, caWallet))
 import Prettyprinter (Pretty (pretty), defaultLayoutOptions, layoutPretty, pretty)
@@ -106,22 +106,26 @@ runConfigCommand :: forall a.
 
 -- Run the database migration
 runConfigCommand _ ConfigCommandArgs{ccaTrace, ccaPABConfig=Config{dbConfig}} Migrate =
-    App.migrate (toPABMsg ccaTrace) dbConfig
+    App.migrate dbConfig (toPABMsg ccaTrace)
 
 -- Run mock wallet service
-runConfigCommand _ ConfigCommandArgs{ccaTrace, ccaPABConfig = Config {nodeServerConfig, chainIndexConfig, walletServerConfig = LocalWalletConfig ws},ccaAvailability} MockWallet = do
+runConfigCommand _ ConfigCommandArgs{ccaTrace, ccaPABConfig = Config {nodeServerConfig, chainQueryConfig = ChainIndexConfig ciConfig, walletServerConfig = LocalWalletConfig ws},ccaAvailability} MockWallet = do
     params <- liftIO $ Params.fromPABServerConfig nodeServerConfig
     liftIO $ WalletServer.main
         (toWalletLog ccaTrace)
         ws
         (pscSocketPath nodeServerConfig)
         params
-        (ChainIndex.ciBaseUrl chainIndexConfig)
+        (ChainIndex.ciBaseUrl ciConfig)
         ccaAvailability
 
 -- Run mock wallet service
 runConfigCommand _ ConfigCommandArgs{ccaPABConfig = Config {walletServerConfig = RemoteWalletConfig}} MockWallet =
     error "Plutus.PAB.Run.Cli.runConfigCommand: Can't run mock wallet in remote wallet config."
+
+-- Run mock wallet service
+runConfigCommand _ ConfigCommandArgs{ccaPABConfig = Config {chainQueryConfig = BlockfrostConfig _}} MockWallet =
+    error "Plutus.PAB.Run.Cli.runConfigCommand: Can't run mock wallet with BlockfrostConfig."
 
 -- Run mock node server
 runConfigCommand _ ConfigCommandArgs{ccaTrace, ccaPABConfig = Config {nodeServerConfig},ccaAvailability} StartNode = do
@@ -131,7 +135,7 @@ runConfigCommand _ ConfigCommandArgs{ccaTrace, ccaPABConfig = Config {nodeServer
                 (toMockNodeServerLog ccaTrace)
                 nodeServerConfig
                 ccaAvailability
-        AlonzoNode -> do
+        _        -> do
             available ccaAvailability
             -- The semantics of Command(s) is that once a set of commands are
             -- started if any finishes the entire application is terminated. We want
@@ -159,19 +163,8 @@ runConfigCommand
                 $ LM.SCoreMsg
                 $ LM.ConnectingToAlonzoNode nodeServerConfig slotNo
 
-    connection <- App.dbConnect (LM.convertLog LM.PABMsg ccaTrace) dbConfig
-    -- Restore the running contracts by first collecting up enough details about the
-    -- previous contracts to re-start them
-    previousContracts <-
-        Beam.runBeamStoreAction connection (LM.convertLog LM.PABMsg ccaTrace)
-        $ interpret (LM.handleLogMsgTrace ccaTrace)
-        $ do
-            cIds   <- Map.toList <$> Contract.getActiveContracts @(Builtin a)
-            forM cIds $ \(cid, args) -> do
-                s <- Contract.getState @(Builtin a) cid
-                let priorContract :: (SomeBuiltinState a, Wallet.ContractInstanceId, ContractActivationArgs a)
-                    priorContract = (s, cid, args)
-                pure priorContract
+    -- retrieve previous contracts only when not in InMemoryBackend mode
+    previousContracts <- retrievePreviousContracts ccaStorageBackend
 
     -- Then, start the server
     result <- App.runApp ccaStorageBackend (toPABMsg ccaTrace) contractHandler config
@@ -194,6 +187,22 @@ runConfigCommand
           liftIO $ takeMVar mvar
     either handleError return result
   where
+
+    retrievePreviousContracts BeamBackend = do
+      connection <- App.dbConnect dbConfig (LM.convertLog LM.PABMsg ccaTrace)
+      -- Restore the running contracts by first collecting up enough details about the
+      -- previous contracts to re-start them
+      Beam.runBeamStoreAction connection (LM.convertLog LM.PABMsg ccaTrace)
+        $ interpret (LM.handleLogMsgTrace ccaTrace)
+        $ do
+            cIds <- Map.toList <$> Contract.getActiveContracts @(Builtin a)
+            forM cIds $ \(cid, args) -> do
+              s <- Contract.getState @(Builtin a) cid
+              let priorContract :: (SomeBuiltinState a, Wallet.ContractInstanceId, ContractActivationArgs a)
+                  priorContract = (s, cid, args)
+              pure priorContract
+    retrievePreviousContracts InMemoryBackend = pure $ Right []
+
     handleError err = do
         runStdoutLoggingT $ (logErrorN . tshow . pretty) err
         exitWith (ExitFailure 2)
@@ -201,8 +210,8 @@ runConfigCommand
 -- Fork a list of commands
 runConfigCommand contractHandler c@ConfigCommandArgs{ccaAvailability, ccaPABConfig=Config {nodeServerConfig} } (ForkCommands commands) =
     let shouldStartMocks = case pscNodeMode nodeServerConfig of
-                             MockNode   -> True
-                             AlonzoNode -> False
+                             MockNode -> True
+                             _        -> False
         startedCommands  = filter (mockedServices shouldStartMocks) commands
      in void $ do
           putStrLn $ "Starting all commands (" <> show startedCommands <> ")."
@@ -223,18 +232,22 @@ runConfigCommand contractHandler c@ConfigCommandArgs{ccaAvailability, ccaPABConf
       pure asyncId
 
 -- Run the chain-index service
-runConfigCommand _ ConfigCommandArgs{ccaAvailability, ccaTrace, ccaPABConfig=Config { nodeServerConfig, chainIndexConfig }} ChainIndex = do
+runConfigCommand _ ConfigCommandArgs{ccaAvailability, ccaTrace, ccaPABConfig=Config { nodeServerConfig, chainQueryConfig = ChainIndexConfig ciConfig}} ChainIndex = do
     params <- liftIO $ Params.fromPABServerConfig nodeServerConfig
     ChainIndex.main
         (toChainIndexLog ccaTrace)
-        chainIndexConfig
+        ciConfig
         (pscSocketPath nodeServerConfig)
         params
         ccaAvailability
 
+-- Run the chain-index service
+runConfigCommand _ ConfigCommandArgs{ccaPABConfig=Config {chainQueryConfig = BlockfrostConfig _ }} ChainIndex =
+    error "Plutus.PAB.Run.Cli.runConfigCommand: Can't run Chain Index with BlockfrostConfig."
+
 -- Get the state of a contract
 runConfigCommand _ ConfigCommandArgs{ccaTrace, ccaPABConfig=Config{dbConfig}} (ContractState contractInstanceId) = do
-    connection <- App.dbConnect (LM.convertLog LM.PABMsg ccaTrace) dbConfig
+    connection <- App.dbConnect dbConfig (LM.convertLog LM.PABMsg ccaTrace)
     fmap (either (error . show) id)
         $ Beam.runBeamStoreAction connection (LM.convertLog LM.PABMsg ccaTrace)
         $ interpret (LM.handleLogMsgTrace ccaTrace)
@@ -259,7 +272,7 @@ runConfigCommand _ ConfigCommandArgs{ccaTrace} ReportAvailableContracts = do
 
 -- Get all active contracts
 runConfigCommand _ ConfigCommandArgs{ccaTrace, ccaPABConfig=Config{dbConfig}} ReportActiveContracts = do
-    connection <- App.dbConnect (LM.convertLog LM.PABMsg ccaTrace) dbConfig
+    connection <- App.dbConnect dbConfig (LM.convertLog LM.PABMsg ccaTrace)
     fmap (either (error . show) id)
         $ Beam.runBeamStoreAction connection (LM.convertLog LM.PABMsg ccaTrace)
         $ interpret (LM.handleLogMsgTrace ccaTrace)
@@ -272,7 +285,7 @@ runConfigCommand _ ConfigCommandArgs{ccaTrace, ccaPABConfig=Config{dbConfig}} Re
 
 -- Get history of a specific contract
 runConfigCommand _ ConfigCommandArgs{ccaTrace, ccaPABConfig=Config{dbConfig}} (ReportContractHistory contractInstanceId) = do
-    connection <- App.dbConnect (LM.convertLog LM.PABMsg ccaTrace) dbConfig
+    connection <- App.dbConnect dbConfig (LM.convertLog LM.PABMsg ccaTrace)
     fmap (either (error . show) id)
         $ Beam.runBeamStoreAction connection (LM.convertLog LM.PABMsg ccaTrace)
         $ interpret (LM.handleLogMsgTrace ccaTrace)

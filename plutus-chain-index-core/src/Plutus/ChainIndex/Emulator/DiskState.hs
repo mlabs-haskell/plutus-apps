@@ -33,15 +33,13 @@ import Data.Semigroup.Generic (GenericSemigroupMonoid (..))
 import Data.Set (Set)
 import Data.Set qualified as Set
 import GHC.Generics (Generic)
+import Ledger (Address (..), Datum, DatumHash, Redeemer, RedeemerHash, Script, ScriptHash, TxId, TxOutRef)
 import Ledger.Ada qualified as Ada
 import Ledger.Credential (Credential)
-import Ledger.Tx (TxId)
-import Plutus.ChainIndex.Tx (ChainIndexTx, ChainIndexTxOut (..), citxData, citxRedeemers, citxScripts, citxTxId,
-                             txOutsWithRef)
+import Ledger.Tx (Versioned)
+import Plutus.ChainIndex.Tx (ChainIndexTx, ChainIndexTxOut (..), citxData, citxScripts, citxTxId, txOutsWithRef,
+                             txRedeemersWithHash)
 import Plutus.ChainIndex.Types (Diagnostics (..))
-import Plutus.V1.Ledger.Api (Address (Address, addressCredential), Datum, DatumHash, Redeemer, RedeemerHash, Script,
-                             TxOutRef)
-import Plutus.V1.Ledger.Scripts (ScriptHash)
 import Plutus.V1.Ledger.Value (AssetClass (AssetClass), flattenValue)
 
 -- | Set of transaction output references for each address.
@@ -123,7 +121,7 @@ txAssetClassMap =
 data DiskState =
     DiskState
         { _DataMap       :: Map DatumHash Datum
-        , _ScriptMap     :: Map ScriptHash Script
+        , _ScriptMap     :: Map ScriptHash (Versioned Script)
         , _RedeemerMap   :: Map RedeemerHash Redeemer
         , _TxMap         :: Map TxId ChainIndexTx
         , _AddressMap    :: CredentialMap
@@ -141,7 +139,7 @@ fromTx tx =
         { _DataMap = view citxData tx
         , _ScriptMap = view citxScripts tx
         , _TxMap = Map.singleton (view citxTxId tx) tx
-        , _RedeemerMap = view citxRedeemers tx
+        , _RedeemerMap = txRedeemersWithHash tx
         , _AddressMap = txCredentialMap tx
         , _AssetClassMap = txAssetClassMap tx
         }

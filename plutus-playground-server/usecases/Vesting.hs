@@ -22,7 +22,7 @@ import Data.Text qualified as T
 
 import Ledger (PaymentPubKeyHash (unPaymentPubKeyHash))
 import Ledger.Ada qualified as Ada
-import Ledger.Constraints (TxConstraints, mustBeSignedBy, mustPayToTheScript, mustValidateIn)
+import Ledger.Constraints (TxConstraints, mustBeSignedBy, mustPayToTheScriptWithDatumInTx, mustValidateIn)
 import Ledger.Constraints qualified as Constraints
 import Ledger.Interval qualified as Interval
 import Ledger.TimeSlot qualified as TimeSlot
@@ -33,7 +33,6 @@ import Ledger.Value qualified as Value
 import Playground.Contract
 import Plutus.Contract
 import Plutus.Contract.Test
-import Plutus.Contract.Typed.Tx qualified as Typed
 import Plutus.V1.Ledger.Api (Address, POSIXTime, POSIXTimeRange, Validator)
 import Plutus.V1.Ledger.Contexts (ScriptContext (..), TxInfo (..))
 import Plutus.V1.Ledger.Contexts qualified as Validation
@@ -158,7 +157,7 @@ vestingContract vesting = selectList [vest, retrieve]
             Dead  -> pure ()
 
 payIntoContract :: Value -> TxConstraints () ()
-payIntoContract = mustPayToTheScript ()
+payIntoContract = mustPayToTheScriptWithDatumInTx ()
 
 vestFundsC
     :: VestingParams
@@ -177,12 +176,12 @@ retrieveFundsC
 retrieveFundsC vesting payment = do
     let inst = typedValidator vesting
         addr = Scripts.validatorAddress inst
-    nextTime <- awaitTime 0
+    now <- fst <$> currentNodeClientTimeRange
     unspentOutputs <- utxosAt addr
     let
-        currentlyLocked = foldMap (view Tx.ciTxOutValue) (Map.elems unspentOutputs)
+        currentlyLocked = foldMap (view Tx.decoratedTxOutValue) (Map.elems unspentOutputs)
         remainingValue = currentlyLocked - payment
-        mustRemainLocked = totalAmount vesting - availableAt vesting nextTime
+        mustRemainLocked = totalAmount vesting - availableAt vesting now
         maxPayment = currentlyLocked - mustRemainLocked
 
     when (remainingValue `Value.lt` mustRemainLocked)
@@ -201,9 +200,9 @@ retrieveFundsC vesting payment = do
         remainingOutputs = case liveness of
                             Alive -> payIntoContract remainingValue
                             Dead  -> mempty
-        txn = Typed.collectFromScript unspentOutputs ()
+        txn = Constraints.collectFromTheScript unspentOutputs ()
                 <> remainingOutputs
-                <> mustValidateIn (Interval.from nextTime)
+                <> mustValidateIn (Interval.from now)
                 <> mustBeSignedBy (vestingOwner vesting)
                 -- we don't need to add a pubkey output for 'vestingOwner' here
                 -- because this will be done by the wallet when it balances the

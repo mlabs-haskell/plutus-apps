@@ -25,6 +25,7 @@ module Plutus.ChainIndex.DbSchema where
 
 import Codec.Serialise (Serialise, deserialiseOrFail, serialise)
 import Data.ByteString (ByteString)
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Data.Coerce (coerce)
 import Data.Either (fromRight)
@@ -36,16 +37,18 @@ import Database.Beam (Beamable, Columnar, Database, DatabaseSettings, FromBacken
 import Database.Beam.Migrate (CheckedDatabaseSettings, defaultMigratableDbSettings, renameCheckedEntity,
                               unCheckDatabase)
 import Database.Beam.Sqlite (Sqlite)
-import Ledger (BlockId (..), ChainIndexTxOut (..), Slot)
+import Ledger (BlockId (..), DecoratedTxOut (..), Slot, Versioned)
 import Plutus.ChainIndex.Tx (ChainIndexTx)
 import Plutus.ChainIndex.Tx qualified as CI
 import Plutus.ChainIndex.Types (BlockNumber (..), Tip (..))
+
 import Plutus.V1.Ledger.Api (Credential, Datum, DatumHash (..), MintingPolicy, MintingPolicyHash (..), Redeemer,
                              RedeemerHash (..), Script, StakeValidator, StakeValidatorHash (..), TxId (..),
                              TxOutRef (..), Validator, ValidatorHash (..))
 import Plutus.V1.Ledger.Scripts (ScriptHash (..))
 import Plutus.V1.Ledger.Value (AssetClass)
 import PlutusTx.Builtins qualified as PlutusTx
+import PlutusTx.Builtins.Internal (BuiltinByteString (..), emptyByteString)
 
 data DatumRowT f = DatumRow
     { _datumRowHash  :: Columnar f ByteString
@@ -92,8 +95,11 @@ instance Table TxRowT where
     primaryKey = TxRowId . _txRowTxId
 
 data AddressRowT f = AddressRow
-    { _addressRowCred   :: Columnar f ByteString
-    , _addressRowOutRef :: Columnar f ByteString
+    { _addressRowCred      :: Columnar f ByteString
+    , _addressRowOutRef    :: Columnar f ByteString
+    -- Keep datumHash in address row which is useful to retrieve all datum associated to a partial
+    -- address
+    , _addressRowDatumHash :: Columnar f ByteString
     } deriving (Generic, Beamable)
 
 type AddressRow = AddressRowT Identity
@@ -101,8 +107,8 @@ type AddressRow = AddressRowT Identity
 instance Table AddressRowT where
     -- We also need an index on just the _addressRowCred column, but the primary key index provides this
     -- as long as _addressRowCred is the first column in the primary key.
-    data PrimaryKey AddressRowT f = AddressRowId (Columnar f ByteString) (Columnar f ByteString) deriving (Generic, Beamable)
-    primaryKey (AddressRow c o) = AddressRowId c o
+    data PrimaryKey AddressRowT f = AddressRowId (Columnar f ByteString) (Columnar f ByteString) (Columnar f ByteString) deriving (Generic, Beamable)
+    primaryKey (AddressRow c o d) = AddressRowId c o d
 
 data AssetClassRowT f = AssetClassRow
     { _assetClassRowAssetClass :: Columnar f ByteString
@@ -257,17 +263,17 @@ instance Serialise a => HasDbType (Serialisable a) where
     toDbValue = BSL.toStrict . serialise . getSerialisable
 
 deriving via Serialisable Datum instance HasDbType Datum
-deriving via Serialisable MintingPolicy instance HasDbType MintingPolicy
 deriving via Serialisable Redeemer instance HasDbType Redeemer
-deriving via Serialisable StakeValidator instance HasDbType StakeValidator
-deriving via Serialisable Validator instance HasDbType Validator
+deriving via Serialisable (Versioned MintingPolicy) instance HasDbType (Versioned MintingPolicy)
+deriving via Serialisable (Versioned StakeValidator) instance HasDbType (Versioned StakeValidator)
+deriving via Serialisable (Versioned Validator) instance HasDbType (Versioned Validator)
+deriving via Serialisable (Versioned Script) instance HasDbType (Versioned Script)
 deriving via Serialisable ChainIndexTx instance HasDbType ChainIndexTx
-deriving via Serialisable ChainIndexTxOut instance HasDbType ChainIndexTxOut
+deriving via Serialisable DecoratedTxOut instance HasDbType DecoratedTxOut
 deriving via Serialisable TxOutRef instance HasDbType TxOutRef
 deriving via Serialisable CI.ChainIndexTxOut instance HasDbType CI.ChainIndexTxOut
 deriving via Serialisable Credential instance HasDbType Credential
 deriving via Serialisable AssetClass instance HasDbType AssetClass
-deriving via Serialisable Script instance HasDbType Script
 
 instance HasDbType Slot where
     type DbType Slot = Word64 -- In Plutus Slot is Integer, but in the Cardano API it is Word64, so this is safe
@@ -291,8 +297,8 @@ instance HasDbType (DatumHash, Datum) where
     toDbValue (hash, datum) = DatumRow (toDbValue hash) (toDbValue datum)
     fromDbValue (DatumRow hash datum) = (fromDbValue hash, fromDbValue datum)
 
-instance HasDbType (ScriptHash, Script) where
-    type DbType (ScriptHash, Script) = ScriptRow
+instance HasDbType (ScriptHash, Versioned Script) where
+    type DbType (ScriptHash, Versioned Script) = ScriptRow
     toDbValue (hash, script) = ScriptRow (toDbValue hash) (toDbValue script)
     fromDbValue (ScriptRow hash script) = (fromDbValue hash, fromDbValue script)
 
@@ -306,10 +312,17 @@ instance HasDbType (TxId, ChainIndexTx) where
     toDbValue (txId, tx) = TxRow (toDbValue txId) (toDbValue tx)
     fromDbValue (TxRow txId tx) = (fromDbValue txId, fromDbValue tx)
 
-instance HasDbType (Credential, TxOutRef) where
-    type DbType (Credential, TxOutRef) = AddressRow
-    toDbValue (cred, outRef) = AddressRow (toDbValue cred) (toDbValue outRef)
-    fromDbValue (AddressRow cred outRef) = (fromDbValue cred, fromDbValue outRef)
+instance HasDbType (Credential, TxOutRef, Maybe DatumHash) where
+  type DbType (Credential, TxOutRef, Maybe DatumHash) = AddressRow
+  toDbValue (cred, outRef, Nothing) = AddressRow (toDbValue cred) (toDbValue outRef) (toDbValue $ DatumHash emptyByteString)
+  toDbValue (cred, outRef, Just dh) = AddressRow (toDbValue cred) (toDbValue outRef) (toDbValue dh)
+  fromDbValue (AddressRow cred outRef dh) =
+    let dh'@(DatumHash (BuiltinByteString bs)) = fromDbValue dh in
+      if BS.null bs then
+        (fromDbValue cred, fromDbValue outRef, Nothing)
+      else
+        (fromDbValue cred, fromDbValue outRef, Just dh')
+
 
 instance HasDbType (AssetClass, TxOutRef) where
     type DbType (AssetClass, TxOutRef) = AssetClassRow

@@ -88,6 +88,7 @@ library
     Plutus.PAB.Core.ContractInstance.BlockchainEnv
     Plutus.PAB.Core.ContractInstance.RequestHandlers
     Plutus.PAB.Core.ContractInstance.STM
+    Plutus.PAB.Core.Indexer.TxConfirmationStatus
     Plutus.PAB.Db.Beam
     Plutus.PAB.Db.Beam.ContractStore
     Plutus.PAB.Db.Memory.ContractStore
@@ -126,6 +127,7 @@ library
   --------------------
   build-depends:
     , freer-extras               >=1.0.0
+    , pab-blockfrost
     , playground-common          >=1.0.0
     , plutus-chain-index         >=1.0.0
     , plutus-chain-index-core    >=1.0.0
@@ -133,6 +135,7 @@ library
     , plutus-ledger              >=1.0.0
     , plutus-ledger-constraints  >=1.0.0
     , plutus-script-utils        >=1.0.0
+    , rewindable-index
 
   --------------------------
   -- Other IOG dependencies
@@ -140,7 +143,9 @@ library
   build-depends:
     , cardano-addresses
     , cardano-api                      >=1.35
+    , cardano-ledger-alonzo
     , cardano-ledger-core
+    , cardano-ledger-shelley
     , cardano-slotting
     , cardano-wallet
     , cardano-wallet-cli
@@ -166,6 +171,7 @@ library
     , base                  >=4.7     && <5
     , beam-core
     , beam-migrate
+    , beam-postgres
     , beam-sqlite
     , bytestring
     , containers
@@ -187,6 +193,7 @@ library
     , network-mux
     , openapi3
     , optparse-applicative
+    , postgresql-simple
     , prettyprinter         >=1.1.0.1
     , QuickCheck
     , quickcheck-instances
@@ -213,6 +220,7 @@ library
     , wai
     , wai-cors
     , warp
+    , warp-tls
     , websockets
     , yaml
 

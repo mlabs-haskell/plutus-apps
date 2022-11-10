@@ -41,10 +41,9 @@ import Data.Maybe (mapMaybe)
 import Data.Set qualified as Set
 import GHC.Generics (Generic)
 
-import Ledger.Blockchain
-import Ledger.Tx (CardanoTx, getCardanoTxId, getCardanoTxOutputs, getCardanoTxUnspentOutputsTx)
+import Ledger.Blockchain (Blockchain, OnChainTx, consumableInputs, outputsProduced, unOnChain)
+import Ledger.Tx (CardanoTx, TxIn (..), TxOut (..), TxOutRef (..), txOutAddress, txOutValue)
 import Plutus.V1.Ledger.Address (Address (..))
-import Plutus.V1.Ledger.Tx (TxIn (..), TxOut (..), TxOutRef (..))
 import Plutus.V1.Ledger.Value (Value)
 
 type UtxoMap = Map TxOutRef (CardanoTx, TxOut)
@@ -121,19 +120,16 @@ traverseWithKey ::
 traverseWithKey f (AddressMap m) = AddressMap <$> Map.traverseWithKey f m
 
 outputsMapFromTxForAddress :: Address -> OnChainTx -> Map TxOutRef (CardanoTx, TxOut)
-outputsMapFromTxForAddress addr (Valid tx) =
-    fmap (tx ,)
+outputsMapFromTxForAddress addr tx =
+    fmap (unOnChain tx ,)
     $ Map.filter ((==) addr . txOutAddress)
-    $ getCardanoTxUnspentOutputsTx tx
-outputsMapFromTxForAddress _ (Invalid _) = mempty
+    $ outputsProduced tx
 
 -- | Create an 'AddressMap' with the unspent outputs of a single transaction.
 fromTxOutputs :: OnChainTx -> AddressMap
-fromTxOutputs (Valid tx) =
-    AddressMap . Map.fromListWith Map.union . fmap mkUtxo . zip [0..] . getCardanoTxOutputs $ tx where
-    mkUtxo (i, t) = (txOutAddress t, Map.singleton (TxOutRef h i) (tx, t))
-    h = getCardanoTxId tx
-fromTxOutputs (Invalid _) = mempty
+fromTxOutputs tx =
+    AddressMap . Map.fromListWith Map.union . fmap mkUtxo . Map.toList . outputsProduced $ tx where
+    mkUtxo (ref, txo) = (txOutAddress txo, Map.singleton ref (unOnChain tx, txo))
 
 -- | Create a map of unspent transaction outputs to their addresses (the
 -- "inverse" of an 'AddressMap', without the values)
@@ -183,7 +179,6 @@ inputs ::
 inputs addrs = Map.fromListWith Set.union
     . fmap (fmap Set.singleton . swap)
     . mapMaybe ((\a -> sequence (a, Map.lookup a addrs)) . txInRef)
-    . Set.toList
     . consumableInputs
 
 -- | Restrict an 'AddressMap' to a set of addresses.

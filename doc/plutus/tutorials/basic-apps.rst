@@ -68,7 +68,9 @@ The validator looks at the ``ValidatorCtx`` value to see if the conditions for m
 
 The validator checks that the transaction, represented by ``scriptContextTxInfo``, pays half the specified amount to each recipient.
 
-You then need some boilerplate to compile the validator to a Plutus script (see :ref:`basic_validators_tutorial`).
+You then need some boilerplate to compile the validator to a Plutus script 
+(see `Writing basic validator scripts <https://plutus.readthedocs.io/en/latest/tutorials/basic-validators.html>`_ 
+in the Plutus Core and Plutus Tx User Guide). 
 
 .. literalinclude:: BasicApps.hs
    :start-after: BLOCK3
@@ -146,7 +148,7 @@ All that's missing now is the code for retrieving the funds, and some glue to pu
 
 In ``unlockFunds`` you use the constraints library to build the spending transaction.
 Here, ``tx`` combines three different constraints.
-``collectFromScript`` takes the script outputs in ``unspentOutputs`` and adds them as input to the transaction, using the unit ``()`` as the redeemer.
+``Constraints.collectFromTheScript`` takes the script outputs in ``unspentOutputs`` and adds them as input to the transaction, using the unit ``()`` as the redeemer.
 The other two constraints use ``mustPayToPubKey`` to add payments for the recipients.
 
 Deploying the app on the Playground

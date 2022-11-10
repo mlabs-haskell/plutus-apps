@@ -64,9 +64,11 @@ library
     Ledger.Blockchain
     Ledger.Builtins.Orphans
     Ledger.CardanoWallet
+    Ledger.Contexts.Orphans
     Ledger.Credential.Orphans
     Ledger.Crypto
     Ledger.Crypto.Orphans
+    Ledger.DCert.Orphans
     Ledger.Fee
     Ledger.Generators
     Ledger.Index
@@ -81,6 +83,7 @@ library
     Ledger.Tokens
     Ledger.Tx
     Ledger.Tx.CardanoAPI
+    Ledger.Tx.CardanoAPI.Internal
     Ledger.Tx.Internal
     Ledger.Tx.Orphans
     Ledger.Tx.Orphans.V1
@@ -121,6 +124,7 @@ library
   --------------------------
   build-depends:
     , cardano-api:{cardano-api, gen}  >=1.35
+    , cardano-binary
     , cardano-crypto
     , cardano-crypto-class
     , cardano-ledger-alonzo
@@ -151,6 +155,7 @@ library
     , cryptonite         >=0.25
     , data-default
     , deepseq
+    , either
     , flat
     , hashable
     , hedgehog
@@ -201,6 +206,7 @@ test-suite plutus-ledger-test
   --------------------------
   build-depends:
     , cardano-api:{cardano-api, gen}  >=1.35
+    , cardano-crypto-class            >=2.0.0
     , plutus-ledger-api               >=1.0.0
     , plutus-tx                       >=1.0.0
 
@@ -211,7 +217,6 @@ test-suite plutus-ledger-test
     , aeson
     , base            >=4.9 && <5
     , bytestring
-    , containers
     , data-default
     , hedgehog
     , tasty

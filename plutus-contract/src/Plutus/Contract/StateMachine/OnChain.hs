@@ -28,14 +28,15 @@ module Plutus.Contract.StateMachine.OnChain(
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Void (Void)
 import GHC.Generics (Generic)
-import Ledger.Constraints (ScriptOutputConstraint (ScriptOutputConstraint, ocDatum, ocValue),
-                           TxConstraints (txOwnOutputs), checkScriptContext)
-import Ledger.Tx (TxOut (txOutValue))
-import Ledger.Typed.Scripts (DatumType, RedeemerType, TypedValidator, ValidatorType, ValidatorTypes, validatorAddress,
-                             validatorHash)
+import Ledger.Constraints (ScriptOutputConstraint (ScriptOutputConstraint, ocDatum, ocReferenceScriptHash, ocValue),
+                           TxConstraints (txOwnOutputs), TxOutDatum (TxOutDatumInTx))
+import Ledger.Constraints.OnChain.V1 (checkScriptContext)
+import Ledger.Typed.Scripts (DatumType, RedeemerType, TypedValidator, ValidatorTypes, validatorAddress, validatorHash)
 import Ledger.Value (Value, isZero)
+import Plutus.Script.Utils.V1.Typed.Scripts qualified as PV1
 import Plutus.V1.Ledger.Api (Address, ValidatorHash)
 import Plutus.V1.Ledger.Contexts (ScriptContext, TxInInfo (txInInfoResolved), findOwnInput, ownHash)
+import Plutus.V1.Ledger.Tx qualified as PV1
 import PlutusTx qualified
 import PlutusTx.Prelude hiding (check)
 import Prelude qualified as Haskell
@@ -109,9 +110,9 @@ machineAddress = validatorAddress . typedValidator
 
 {-# INLINABLE mkValidator #-}
 -- | Turn a state machine into a validator script.
-mkValidator :: forall s i. (PlutusTx.ToData s) => StateMachine s i -> ValidatorType (StateMachine s i)
+mkValidator :: forall s i. (PlutusTx.ToData s) => StateMachine s i -> PV1.ValidatorType (StateMachine s i)
 mkValidator (StateMachine step isFinal check threadToken) currentState input ptx =
-    let vl = maybe (traceError "S0" {-"Can't find validation input"-}) (txOutValue . txInInfoResolved) (findOwnInput ptx)
+    let vl = maybe (traceError "S0" {-"Can't find validation input"-}) (PV1.txOutValue . txInInfoResolved) (findOwnInput ptx)
         checkOk =
             traceIfFalse "S1" {-"State transition invalid - checks failed"-} (check currentState input ptx)
             && traceIfFalse "S2" {-"Thread token not found"-} (TT.checkThreadToken threadToken (ownHash ptx) vl 1)
@@ -130,9 +131,10 @@ mkValidator (StateMachine step isFinal check threadToken) currentState input ptx
                             newConstraints
                                 { txOwnOutputs =
                                     [ ScriptOutputConstraint
-                                        { ocDatum = newData
+                                        { ocDatum = TxOutDatumInTx newData
                                           -- Check that the thread token value is still there
                                         , ocValue = newValue <> threadTokenValueInner threadToken (ownHash ptx)
+                                        , ocReferenceScriptHash = Nothing
                                         }
                                     ]
                                 }

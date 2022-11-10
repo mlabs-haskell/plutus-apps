@@ -59,11 +59,11 @@ import Ledger (PaymentPubKeyHash (unPaymentPubKeyHash), getCardanoTxId)
 import Ledger qualified
 import Ledger.Ada qualified as Ada
 import Ledger.Constraints qualified as Constraints
+import Ledger.Interval (Extended (NegInf), Interval (Interval), LowerBound (LowerBound))
 import Ledger.Interval qualified as Interval
 import Ledger.TimeSlot qualified as TimeSlot
 import Ledger.Typed.Scripts qualified as Scripts hiding (validatorHash)
 import Plutus.Contract
-import Plutus.Contract.Typed.Tx qualified as Typed
 import Plutus.Script.Utils.V1.Scripts qualified as PV1
 import Plutus.Trace.Effects.EmulatorControl (getSlotConfig)
 import Plutus.Trace.Emulator (ContractHandle, EmulatorTrace)
@@ -124,7 +124,9 @@ mkCampaign ddl collectionDdl ownerWallet =
 {-# INLINABLE collectionRange #-}
 collectionRange :: Campaign -> PV1.POSIXTimeRange
 collectionRange cmp =
-    Interval.interval (campaignDeadline cmp) (campaignCollectionDeadline cmp - 1)
+    Interval
+        (Interval.lowerBound $ campaignDeadline cmp)
+        (Interval.strictUpperBound $ campaignCollectionDeadline cmp)
 
 -- | The 'POSIXTimeRange' during which a refund may be claimed
 {-# INLINABLE refundRange #-}
@@ -206,8 +208,11 @@ contribute cmp = endpoint @"contribute" $ \Contribution{contribValue} -> do
     logInfo @Text $ "Contributing " <> Text.pack (Haskell.show contribValue)
     contributor <- ownFirstPaymentPubKeyHash
     let inst = typedValidator cmp
-        tx = Constraints.mustPayToTheScript contributor contribValue
-                <> Constraints.mustValidateIn (Interval.to (campaignDeadline cmp))
+        validityTimeRange =
+            Interval (LowerBound NegInf True)
+                     (Interval.strictUpperBound $ campaignDeadline cmp)
+        tx = Constraints.mustPayToTheScriptWithDatumInTx contributor contribValue
+                <> Constraints.mustValidateIn validityTimeRange
     txid <- fmap getCardanoTxId $ mkTxConstraints (Constraints.typedValidatorLookups inst) tx
         >>= adjustUnbalancedTx >>= submitUnbalancedTx
 
@@ -218,7 +223,7 @@ contribute cmp = endpoint @"contribute" $ \Contribution{contribValue} -> do
     -- then we can claim a refund.
 
     let flt Ledger.TxOutRef{txOutRefId} _ = txid Haskell.== txOutRefId
-        tx' = Typed.collectFromScriptFilter flt utxo Refund
+        tx' = Constraints.collectFromTheScriptFilter flt utxo Refund
                 <> Constraints.mustValidateIn (refundRange cmp)
                 <> Constraints.mustBeSignedBy contributor
     if Constraints.modifiesUtxoSet tx'
@@ -244,7 +249,8 @@ scheduleCollection cmp = endpoint @"schedule collection" $ \() -> do
     _ <- awaitTime $ campaignDeadline cmp
     unspentOutputs <- utxosAt (Scripts.validatorAddress inst)
 
-    let tx = Typed.collectFromScript unspentOutputs Collect
+    let tx = Constraints.collectFromTheScript unspentOutputs Collect
+            <> Constraints.mustBeSignedBy (campaignOwner cmp)
             <> Constraints.mustValidateIn (collectionRange cmp)
 
     logInfo @Text "Collecting funds"

@@ -68,12 +68,12 @@ badRemove us BadRemoveParams{..} = do
         redeemer     = Redeemer $ PlutusTx.toBuiltinData Remove
 
         lookups  = Constraints.typedValidatorLookups usInst          <>
-                   Constraints.otherScript usScript                  <>
-                   Constraints.mintingPolicy (liquidityPolicy us)   <>
+                   Constraints.plutusV1OtherScript usScript                  <>
+                   Constraints.plutusV1MintingPolicy (liquidityPolicy us)   <>
                    Constraints.unspentOutputs (Map.singleton oref o) <>
                    Constraints.ownPaymentPubKeyHash pkh
 
-        tx       = Constraints.mustPayToTheScript dat val          <>
+        tx       = Constraints.mustPayToTheScriptWithDatumInTx dat val          <>
                    Constraints.mustMintValue (negate lVal)         <>
                    Constraints.mustSpendScriptOutput oref redeemer
 

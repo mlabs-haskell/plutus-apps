@@ -58,8 +58,9 @@ import Data.Text qualified as Text
 import Data.UUID (UUID)
 import GHC.Generics (C1, Constructor, D1, Generic, K1 (K1), M1 (M1), Rec0, Rep, S1, Selector, U1, conIsRecord, conName,
                      from, selName, (:*:) ((:*:)), (:+:) (L1, R1))
-import Ledger (Ada, AssetClass, CurrencySymbol, Interval, POSIXTime, POSIXTimeRange, PaymentPubKey, PaymentPubKeyHash,
-               PubKey, PubKeyHash, Signature, Slot, StakePubKey, StakePubKeyHash, TokenName, TxId, TxOutRef, Value)
+import Ledger (Ada, AssetClass, CurrencySymbol, Interval, Language, POSIXTime, POSIXTimeRange, PaymentPubKey,
+               PaymentPubKeyHash, PubKey, PubKeyHash, Signature, Slot, StakePubKey, StakePubKeyHash, TokenName, TxId,
+               TxOutRef, Value)
 import Ledger.Bytes (LedgerBytes)
 import Ledger.CardanoWallet (WalletNumber)
 import Plutus.Contract.Secrets (SecretArgument (EndpointSide, UserSide))
@@ -402,6 +403,8 @@ deriving anyclass instance ToSchema PubKeyHash
 deriving anyclass instance ToSchema PaymentPubKey
 
 deriving anyclass instance ToSchema PaymentPubKeyHash
+
+deriving anyclass instance ToSchema Language
 
 deriving anyclass instance ToSchema StakePubKey
 

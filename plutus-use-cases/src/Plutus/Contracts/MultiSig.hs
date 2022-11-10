@@ -30,7 +30,6 @@ import Ledger
 import Ledger.Constraints qualified as Constraints
 import Ledger.Typed.Scripts qualified as Scripts
 import Plutus.Contract
-import Plutus.Contract.Typed.Tx qualified as Tx
 import Plutus.V1.Ledger.Contexts as V
 import PlutusTx qualified
 import PlutusTx.Prelude hiding (Semigroup (..), foldMap)
@@ -78,7 +77,7 @@ typedValidator = Scripts.mkTypedValidatorParam @MultiSig
 lock :: AsContractError e => Promise () MultiSigSchema e ()
 lock = endpoint @"lock" $ \(ms, vl) -> do
     let inst = typedValidator ms
-    let tx = Constraints.mustPayToTheScript () vl
+    let tx = Constraints.mustPayToTheScriptWithDatumInTx () vl
         lookups = Constraints.typedValidatorLookups inst
     mkTxConstraints lookups tx
         >>= adjustUnbalancedTx >>= void . submitUnbalancedTx
@@ -89,7 +88,7 @@ unlock :: AsContractError e => Promise () MultiSigSchema e ()
 unlock = endpoint @"unlock" $ \(ms, pks) -> do
     let inst = typedValidator ms
     utx <- utxosAt (Scripts.validatorAddress inst)
-    let tx = Tx.collectFromScript utx ()
+    let tx = Constraints.collectFromTheScript utx ()
                 <> foldMap Constraints.mustBeSignedBy pks
         lookups = Constraints.typedValidatorLookups inst
                 <> Constraints.unspentOutputs utx

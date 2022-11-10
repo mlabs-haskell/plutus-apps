@@ -1444,11 +1444,11 @@ finalChecks opts copts predicate prop = do
           env <- innerAction
           hdl <- activateContract w1 (getEnvContract @()) envContractInstanceTag
           void $ callEndpoint @"register-token-env" hdl env
-        stream :: forall effs. S.Stream (S.Of (LogMessage EmulatorEvent)) (Eff effs) (Maybe EmulatorErr)
+        stream :: forall effs. S.Stream (S.Of (LogMessage EmulatorEvent)) (Eff effs) (Either EmulatorErr ())
         stream = fst <$> runEmulatorStream (opts ^. emulatorConfig) action
         (errorResult, events) = S.streamFold (,[]) run (\ (msg S.:> es) -> (fst es, (msg ^. logMessageContent) : snd es)) stream
     case errorResult of
-      Just err -> do
+      Left err -> do
         QC.monitor $ counterexample (show err)
         QC.assert False
       _ -> return ()
@@ -1911,12 +1911,12 @@ checkErrorWhitelistWithOptions opts copts whitelist acts = property $ go check a
     checkOnchain = assertChainEvents checkEvents
 
     checkOffchain :: TracePredicate
-    checkOffchain = assertFailedTransaction (\ _ _ -> all (either checkEvent (const True) . sveResult))
+    checkOffchain = assertFailedTransaction (\ _ ve -> case ve of {ScriptFailure e -> checkEvent e; _ -> False})
 
     checkEvent :: ScriptError -> Bool
     checkEvent (EvaluationError log msg) | "CekEvaluationFailure" `isPrefixOf` msg = listToMaybe (reverse log) `isAcceptedBy` whitelist
     checkEvent (EvaluationError _ msg) | "BuiltinEvaluationFailure" `isPrefixOf` msg = False
-    checkEvent _                                            = False
+    checkEvent _ = False
 
     checkEvents :: [ChainEvent] -> Bool
     checkEvents events = all checkEvent [ f | (TxnValidationFail _ _ _ (ScriptFailure f) _ _) <- events ]

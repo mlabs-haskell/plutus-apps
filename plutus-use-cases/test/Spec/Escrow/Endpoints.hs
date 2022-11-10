@@ -9,6 +9,7 @@ module Spec.Escrow.Endpoints where
 
 import Data.Text (unpack)
 
+import Control.Lens (_1, has, only)
 import Control.Monad (void)
 
 import Ledger (PaymentPubKeyHash)
@@ -17,11 +18,10 @@ import Ledger.Interval (from)
 import Ledger.Tx qualified as Tx
 import Ledger.Typed.Scripts (TypedValidator)
 import Ledger.Typed.Scripts qualified as Scripts
-import Plutus.Script.Utils.V1.Scripts qualified as Ledger
+import Plutus.Script.Utils.Scripts qualified as Ledger
 import Plutus.V1.Ledger.Api (Datum (Datum))
 
 import Plutus.Contract
-import Plutus.Contract.Typed.Tx qualified as Typed
 import PlutusTx qualified
 import PlutusTx.Prelude hiding (Applicative (..), Semigroup (..), check, foldMap)
 
@@ -48,9 +48,10 @@ badRefund ::
     -> Contract w s EscrowError ()
 badRefund inst pk = do
     unspentOutputs <- utxosAt (Scripts.validatorAddress inst)
-    current <- currentTime
-    let flt _ ciTxOut = either id Ledger.datumHash (Tx._ciTxOutDatum ciTxOut) == Ledger.datumHash (Datum (PlutusTx.toBuiltinData pk))
-        tx' = Typed.collectFromScriptFilter flt unspentOutputs Refund
+    current <- snd <$> currentNodeClientTimeRange
+    let pkh = Ledger.datumHash $ Datum $ PlutusTx.toBuiltinData pk
+        flt _ ciTxOut = has (Tx.decoratedTxOutScriptDatum . _1 . only pkh) ciTxOut
+        tx' = Constraints.collectFromTheScriptFilter flt unspentOutputs Refund
            <> Constraints.mustValidateIn (from (current - 1))
     utx <- mkTxConstraints ( Constraints.typedValidatorLookups inst
                           <> Constraints.unspentOutputs unspentOutputs

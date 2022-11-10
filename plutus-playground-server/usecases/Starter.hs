@@ -77,7 +77,7 @@ contract = selectList [publish, redeem]
 -- | The "publish" contract endpoint.
 publish :: AsContractError e => Promise () Schema e ()
 publish = endpoint @"publish" $ \(i, lockedFunds) -> do
-    let tx = Constraints.mustPayToTheScript (MyDatum i) lockedFunds
+    let tx = Constraints.mustPayToTheScriptWithDatumInTx (MyDatum i) lockedFunds
     void $ submitTxConstraints starterInstance tx
 
 -- | The "redeem" contract endpoint.
@@ -85,7 +85,7 @@ redeem :: AsContractError e => Promise () Schema e ()
 redeem = endpoint @"redeem" $ \myRedeemerValue -> do
     unspentOutputs <- utxosAt contractAddress
     let redeemer = MyRedeemer myRedeemerValue
-        tx       = collectFromScript unspentOutputs redeemer
+        tx       = Constraints.collectFromTheScript unspentOutputs redeemer
     void $ submitTxConstraintsSpending starterInstance unspentOutputs tx
 
 endpoints :: AsContractError e => Contract () Schema e ()

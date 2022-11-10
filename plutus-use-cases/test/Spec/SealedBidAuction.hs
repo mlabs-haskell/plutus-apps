@@ -247,5 +247,5 @@ tests :: TestTree
 tests =
   testGroup "sealed bid auction"
     [ testProperty "packInteger is injective" $ \x y -> x /= y ==> packInteger x /= packInteger y
-    , testProperty "prop_AuctionModelCorrect" $ withMaxSuccess 20 prop_Auction
+    , testProperty "prop_AuctionModelCorrect" prop_Auction
     ]

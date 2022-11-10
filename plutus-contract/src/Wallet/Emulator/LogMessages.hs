@@ -15,11 +15,12 @@ module Wallet.Emulator.LogMessages(
 
 import Control.Lens.TH (makePrisms)
 import Data.Aeson (FromJSON, ToJSON)
+import Data.Text (Text)
 import GHC.Generics (Generic)
 import Ledger (Address, CardanoTx, TxId, getCardanoTxId)
 import Ledger.Ada qualified as Ada
 import Ledger.Constraints.OffChain (UnbalancedTx)
-import Ledger.Index (ScriptValidationEvent, ValidationError, ValidationPhase)
+import Ledger.Index (ValidationError, ValidationPhase)
 import Ledger.Slot (Slot)
 import Ledger.Value (Value)
 import Prettyprinter (Pretty (..), colon, hang, viaShow, vsep, (<+>))
@@ -61,8 +62,8 @@ data TxBalanceMsg =
         TxId
         CardanoTx
         ValidationError
-        [ScriptValidationEvent]
         Value -- ^ The amount of collateral stored in the transaction.
+        [Text]
     deriving stock (Eq, Show, Generic)
     deriving anyclass (ToJSON, FromJSON)
 

@@ -1,7 +1,7 @@
-{-# LANGUAGE DeriveAnyClass     #-}
-{-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE FlexibleInstances  #-}
-{-# LANGUAGE OverloadedStrings  #-}
+{-# LANGUAGE DeriveAnyClass    #-}
+{-# LANGUAGE DerivingVia       #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 {-# OPTIONS_GHC -Wno-orphans #-}
 
@@ -29,20 +29,22 @@ import Data.Typeable (Proxy (Proxy), Typeable)
 import GHC.Generics (Generic)
 import Ledger.Ada (Ada (Lovelace))
 import Ledger.Crypto (PrivateKey (PrivateKey, getPrivateKey), PubKey (PubKey), Signature (Signature))
+import Ledger.Scripts (Language, Versioned)
 import Ledger.Slot (Slot (Slot))
-import Ledger.Tx.Internal (Tx)
-import Plutus.V1.Ledger.Api (Address, Credential, CurrencySymbol (CurrencySymbol), Extended, Interval,
+import Plutus.V1.Ledger.Api (Address, Credential, CurrencySymbol (CurrencySymbol), DCert, Extended, Interval,
                              LedgerBytes (LedgerBytes), LowerBound, MintingPolicy (MintingPolicy),
                              MintingPolicyHash (MintingPolicyHash), POSIXTime (POSIXTime), PubKeyHash (PubKeyHash),
                              Redeemer (Redeemer), RedeemerHash (RedeemerHash), Script, StakeValidator (StakeValidator),
                              StakeValidatorHash (StakeValidatorHash), StakingCredential, TokenName (TokenName),
-                             TxId (TxId), TxOut, TxOutRef, UpperBound, Validator (Validator),
-                             ValidatorHash (ValidatorHash), Value (Value), fromBytes)
+                             TxId (TxId), TxOutRef, UpperBound, Validator (Validator), ValidatorHash (ValidatorHash),
+                             Value (Value), fromBytes)
+import Plutus.V1.Ledger.Api qualified as PV1
 import Plutus.V1.Ledger.Bytes (bytes)
 import Plutus.V1.Ledger.Scripts (ScriptError, ScriptHash (..))
 import Plutus.V1.Ledger.Time (DiffMilliSeconds (DiffMilliSeconds))
-import Plutus.V1.Ledger.Tx (RedeemerPtr, ScriptTag, TxIn, TxInType)
+import Plutus.V1.Ledger.Tx (RedeemerPtr, ScriptTag)
 import Plutus.V1.Ledger.Value (AssetClass (AssetClass))
+import Plutus.V2.Ledger.Api qualified as PV2
 import PlutusCore (Kind, Some, Term, Type, ValueOf, Version)
 import PlutusTx.AssocMap qualified as AssocMap
 import Web.HttpApiData (FromHttpApiData (parseUrlPiece), ToHttpApiData (toUrlPiece))
@@ -67,8 +69,8 @@ instance BA.ByteArrayAccess TxId where
 
 instance OpenApi.ToSchema C.ScriptHash where
     declareNamedSchema _ = pure $ OpenApi.NamedSchema (Just "ScriptHash") mempty
-instance OpenApi.ToSchema (C.AddressInEra C.AlonzoEra) where
-    declareNamedSchema _ = pure $ OpenApi.NamedSchema (Just "AddressInAlonzoEra") mempty
+instance OpenApi.ToSchema (C.AddressInEra C.BabbageEra) where
+    declareNamedSchema _ = pure $ OpenApi.NamedSchema (Just "AddressInBabbageEra") mempty
 deriving instance Generic C.ScriptData
 instance OpenApi.ToSchema C.ScriptData where
     declareNamedSchema _ =
@@ -89,7 +91,6 @@ instance OpenApi.ToSchema C.AssetName where
         pure $ OpenApi.NamedSchema (Just "AssetName") OpenApi.byteSchema
 deriving instance Generic C.Quantity
 deriving anyclass instance OpenApi.ToSchema C.Quantity
-
 deriving anyclass instance (OpenApi.ToSchema k, OpenApi.ToSchema v) => OpenApi.ToSchema (AssocMap.Map k v)
 instance OpenApi.ToSchema Crypto.XPub where
     declareNamedSchema _ = pure $ OpenApi.NamedSchema (Just "PubKey") mempty
@@ -107,13 +108,12 @@ instance OpenApi.ToSchema JSON.Value where
     declareNamedSchema _ = pure $ OpenApi.NamedSchema (Just "JSON") mempty
 deriving instance OpenApi.ToSchema ann => OpenApi.ToSchema (Kind ann)
 deriving newtype instance OpenApi.ToSchema Ada
-deriving instance OpenApi.ToSchema Tx
+deriving instance OpenApi.ToSchema DCert
 deriving instance OpenApi.ToSchema ScriptTag
 deriving instance OpenApi.ToSchema RedeemerPtr
 deriving instance OpenApi.ToSchema TxOutRef
-deriving instance OpenApi.ToSchema TxInType
-deriving instance OpenApi.ToSchema TxIn
-deriving instance OpenApi.ToSchema TxOut
+deriving instance OpenApi.ToSchema PV1.TxOut
+deriving instance OpenApi.ToSchema PV2.TxOut
 deriving newtype instance OpenApi.ToSchema Validator
 deriving newtype instance OpenApi.ToSchema TxId
 deriving newtype instance OpenApi.ToSchema Slot
@@ -156,6 +156,8 @@ instance OpenApi.ToSchema Script where
     declareNamedSchema _ =
         pure $ OpenApi.NamedSchema (Just "Script") (OpenApi.toSchema (Proxy :: Proxy String))
 deriving newtype instance OpenApi.ToSchema ScriptHash
+deriving instance OpenApi.ToSchema Language
+deriving instance OpenApi.ToSchema script => OpenApi.ToSchema (Versioned script)
 
 -- 'POSIXTime' instances
 

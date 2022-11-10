@@ -21,18 +21,17 @@ import Data.FingerTree ((|>))
 import Data.FingerTree qualified as FT
 import Data.Map qualified as Map
 import Data.Monoid (Last (..), Sum (..))
-import Ledger (OnChainTx, TxId, eitherTx)
-import Plutus.ChainIndex.Tx (ChainIndexTx (..), ChainIndexTxOutputs (..), citxOutputs, citxTxId)
+import Ledger (OnChainTx, TxId, onChainTxIsValid)
+import Plutus.ChainIndex.Tx (ChainIndexTx (..), citxTxId, validityFromChainIndex)
 import Plutus.ChainIndex.Types (BlockNumber (..), Depth (..), Point (..), RollbackState (..), Tip (..),
                                 TxConfirmedState (..), TxIdState (..), TxStatus, TxStatusFailure (..), TxValidity (..))
 import Plutus.ChainIndex.UtxoState (RollbackFailed (..), RollbackResult (..), UtxoIndex, UtxoState (..), rollbackWith,
                                     tip, utxoState, viewTip)
 
-
 -- | The 'TxStatus' of a transaction right after it was added to the chain
 initialStatus :: OnChainTx -> TxStatus
 initialStatus tx =
-  TentativelyConfirmed 0 (eitherTx (const TxInvalid) (const TxValid) tx) ()
+  TentativelyConfirmed 0 (if onChainTxIsValid tx then TxValid else TxInvalid) ()
 
 -- | Increase the depth of a tentatively confirmed transaction
 increaseDepth :: TxStatus -> TxStatus
@@ -101,12 +100,6 @@ fromBlock tip_ transactions =
     { _usTxUtxoData = foldMap (fromTx $ tipBlockNo tip_) transactions
     , _usTip = tip_
     }
-
-validityFromChainIndex :: ChainIndexTx -> TxValidity
-validityFromChainIndex tx =
-  case tx ^. citxOutputs of
-    InvalidTx -> TxInvalid
-    ValidTx _ -> TxValid
 
 fromTx :: BlockNumber -> ChainIndexTx -> TxIdState
 fromTx blockNumber tx =

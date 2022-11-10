@@ -36,6 +36,7 @@ module Plutus.Contract.Test(
     , assertInstanceLog
     , assertNoFailedTransactions
     , assertValidatedTransactionCount
+    , assertValidatedTransactionCountOfTotal
     , assertFailedTransaction
     , assertHooks
     , assertResponses
@@ -60,18 +61,19 @@ module Plutus.Contract.Test(
     -- * Checking predicates
     , checkPredicate
     , checkPredicateCoverage
+    , checkPredicateCoverageOptions
     , checkPredicateOptions
     , checkPredicateGen
     , checkPredicateGenOptions
     , checkPredicateInner
     , checkPredicateInnerStream
     , checkEmulatorFails
-    , CheckOptions
+    , CheckOptions(..)
     , defaultCheckOptions
     , minLogLevel
     , emulatorConfig
     , changeInitialWalletValue
-    , allowBigTransactions
+    , increaseTransactionLimits
     -- * Etc
     , goldenPir
     ) where
@@ -80,8 +82,8 @@ import Control.Applicative (liftA2)
 import Control.Arrow ((>>>))
 import Control.Foldl (FoldM)
 import Control.Foldl qualified as L
-import Control.Lens (_Left, at, ix, makeLenses, over, preview, to, (&), (.~), (^.))
-import Control.Monad (unless)
+import Control.Lens (_Left, at, ix, makeLenses, over, preview, (&), (.~), (^.))
+import Control.Monad (guard, unless)
 import Control.Monad.Freer (Eff, interpretM, runM)
 import Control.Monad.Freer.Error (Error, runError)
 import Control.Monad.Freer.Extras.Log (LogLevel (..), LogMessage (..))
@@ -111,7 +113,6 @@ import Test.Tasty.Providers (TestTree)
 
 import Ledger.Ada qualified as Ada
 import Ledger.Constraints.OffChain (UnbalancedTx)
-import Ledger.Tx (Tx, onCardanoTx)
 import Plutus.Contract.Effects qualified as Requests
 import Plutus.Contract.Request qualified as Request
 import Plutus.Contract.Resumable (Request (..), Response (..))
@@ -124,12 +125,13 @@ import Ledger qualified
 import Ledger.Address (Address)
 import Ledger.Generators (GeneratorModel, Mockchain (..))
 import Ledger.Generators qualified as Gen
-import Ledger.Index (ScriptValidationEvent, ValidationError)
+import Ledger.Index (ValidationError)
 import Ledger.Slot (Slot)
 import Ledger.Value (Value)
 import Plutus.V1.Ledger.Scripts qualified as PV1
 
 import Data.IORef
+import Ledger.Tx (Tx, onCardanoTx)
 import Plutus.Contract.Test.Coverage
 import Plutus.Contract.Test.MissingLovelace (calculateDelta)
 import Plutus.Contract.Trace as X
@@ -188,8 +190,8 @@ changeInitialWalletValue wallet = over (emulatorConfig . initialChainState . _Le
 -- | Set higher limits on transaction size and execution units.
 -- This can be used to work around @MaxTxSizeUTxO@ and @ExUnitsTooBigUTxO@ errors.
 -- Note that if you need this your Plutus script will probably not validate on Mainnet.
-allowBigTransactions :: CheckOptions -> CheckOptions
-allowBigTransactions = over (emulatorConfig . params) Ledger.allowBigTransactions
+increaseTransactionLimits :: CheckOptions -> CheckOptions
+increaseTransactionLimits = over (emulatorConfig . params) Ledger.increaseTransactionLimits
 
 -- | Check if the emulator trace meets the condition
 checkPredicate ::
@@ -205,9 +207,19 @@ checkPredicateCoverage ::
     -> TracePredicate -- ^ The predicate to check
     -> EmulatorTrace ()
     -> TestTree
-checkPredicateCoverage nm (CoverageRef ioref) predicate action =
+checkPredicateCoverage nm cr predicate action =
+  checkPredicateCoverageOptions defaultCheckOptions nm cr predicate action
+
+checkPredicateCoverageOptions ::
+    CheckOptions -- ^ Options to use
+    -> String -- ^ Descriptive name of the test
+    -> CoverageRef
+    -> TracePredicate -- ^ The predicate to check
+    -> EmulatorTrace ()
+    -> TestTree
+checkPredicateCoverageOptions options nm (CoverageRef ioref) predicate action =
   HUnit.testCaseSteps nm $ \step -> do
-        checkPredicateInner defaultCheckOptions predicate action step (HUnit.assertBool nm) (\ rep -> modifyIORef ioref (rep<>))
+        checkPredicateInner options predicate action step (HUnit.assertBool nm) (\ rep -> modifyIORef ioref (rep<>))
 
 -- | Check if the emulator trace fails with the condition
 checkEmulatorFails ::
@@ -240,8 +252,8 @@ checkPredicateInner :: forall m.
     -> (Bool -> m ()) -- ^ assert
     -> (CoverageData -> m ())
     -> m ()
-checkPredicateInner opts@CheckOptions{_emulatorConfig} predicate action annot assert cover =
-    checkPredicateInnerStream opts predicate (S.void $ runEmulatorStream _emulatorConfig action) annot assert cover
+checkPredicateInner opts@CheckOptions{_emulatorConfig} predicate action =
+    checkPredicateInnerStream opts predicate (S.void $ runEmulatorStream _emulatorConfig action)
 
 checkPredicateInnerStream :: forall m.
     Monad m
@@ -253,7 +265,7 @@ checkPredicateInnerStream :: forall m.
     -> (CoverageData -> m ())
     -> m ()
 checkPredicateInnerStream CheckOptions{_minLogLevel, _emulatorConfig} (TracePredicate predicate) theStream annot assert cover = do
-    let dist = _emulatorConfig ^. initialChainState . to initialDist
+    let dist = initialDist _emulatorConfig
         consumedStream :: Eff (TestEffects :++: '[m]) Bool
         consumedStream = S.fst' <$> foldEmulatorStreamM (liftA2 (&&) predicate generateCoverage) theStream
 
@@ -264,7 +276,7 @@ checkPredicateInnerStream CheckOptions{_minLogLevel, _emulatorConfig} (TracePred
                 $ interpretM @(Writer (Doc Void)) @m (\case { Tell d -> annot $ Text.unpack $ renderStrict $ layoutPretty defaultLayoutOptions d })
                 $ runError
                 $ runReader dist
-                $ consumedStream
+                consumedStream
 
     unless (result == Right True) $ do
         annot "Test failed."
@@ -283,7 +295,11 @@ checkPredicateInnerStream CheckOptions{_minLogLevel, _emulatorConfig} (TracePred
                 assert False
             Right r -> assert r
 
--- | A version of 'checkPredicateGen' with configurable 'CheckOptions'
+-- | A version of 'checkPredicateGen' with configurable 'CheckOptions'.
+--
+--   Note that the 'InitialChainState' in the 'EmulatorConfig' of the
+--   'CheckOptions' will be replaced with the 'mockchainInitialTxPool' generated
+--   by the model.
 checkPredicateGenOptions ::
     CheckOptions
     -> GeneratorModel
@@ -383,9 +399,9 @@ getTxOutDatum ::
   Ledger.CardanoTx ->
   Ledger.TxOut ->
   Maybe d
-getTxOutDatum _ (Ledger.TxOut _ _ Nothing) = Nothing
-getTxOutDatum tx' (Ledger.TxOut _ _ (Just datumHash)) =
-    Map.lookup datumHash (Ledger.getCardanoTxData tx') >>= (Ledger.getDatum >>> fromBuiltinData @d)
+getTxOutDatum tx' txOut = Ledger.txOutDatumHash txOut >>= go
+    where
+        go datumHash = Map.lookup datumHash (Ledger.getCardanoTxData tx') >>= (Ledger.getDatum >>> fromBuiltinData @d)
 
 dataAtAddress :: forall d . FromData d => Address -> ([d] -> Bool) -> TracePredicate
 dataAtAddress address check = TracePredicate $
@@ -583,7 +599,7 @@ walletFundsChangeImpl exact w dlt' = TracePredicate $
             tell @(Doc Void) $ vsep $
                 [ "Expected funds of" <+> pretty w <+> "to change by"
                 , " " <+> viaShow dlt] ++
-                (if exact then [] else ["  (excluding" <+> viaShow (Ada.getLovelace (Ada.fromValue fees)) <+> "lovelace in fees)" ]) ++
+                (guard exact >> ["  (excluding" <+> viaShow (Ada.getLovelace (Ada.fromValue fees)) <+> "lovelace in fees)" ]) ++
                 if initialValue == finalValue
                 then ["but they did not change"]
                 else ["but they changed by", " " <+> viaShow (finalValue P.- initialValue),
@@ -628,13 +644,13 @@ assertChainEvents' logMsg predicate = TracePredicate $
 
 -- | Assert that at least one transaction failed to validate, and that all
 --   transactions that failed meet the predicate.
-assertFailedTransaction :: (Tx -> ValidationError -> [ScriptValidationEvent] -> Bool) -> TracePredicate
+assertFailedTransaction :: (Tx -> ValidationError -> Bool) -> TracePredicate
 assertFailedTransaction predicate = TracePredicate $
     flip postMapM (L.generalize $ Folds.failedTransactions Nothing) $ \case
         [] -> do
             tell @(Doc Void) $ "No transactions failed to validate."
             pure False
-        xs -> pure (all (\(_, t, e, evts, _) -> onCardanoTx (\t' -> predicate t' e evts) (const True) t) xs)
+        xs -> pure (all (\(_, t, e, _, _) -> onCardanoTx (\t' -> predicate t' e) (const True) t) xs)
 
 -- | Assert that no transaction failed to validate.
 assertNoFailedTransactions :: TracePredicate
@@ -648,13 +664,21 @@ assertNoFailedTransactions = TracePredicate $
 
 -- | Assert that n transactions validated, and no transaction failed to validate.
 assertValidatedTransactionCount :: Int -> TracePredicate
-assertValidatedTransactionCount expected =
-    assertNoFailedTransactions
-    .&&.
+assertValidatedTransactionCount expected = assertValidatedTransactionCountOfTotal expected expected
+
+-- | Assert that n transactions validated, and the rest failed.
+assertValidatedTransactionCountOfTotal :: Int -> Int -> TracePredicate
+assertValidatedTransactionCountOfTotal expectedValid expectedTotal =
     TracePredicate (flip postMapM (L.generalize Folds.validatedTransactions) $ \xs ->
         let actual = length xs - 1 in -- ignore the initial wallet distribution transaction
-        if actual == expected then pure True else do
+        if actual == expectedValid then pure True else do
             tell @(Doc Void) $ "Unexpected number of validated transactions:" <+> pretty actual
+            pure False
+    ) .&&.
+    TracePredicate (flip postMapM (L.generalize $ Folds.failedTransactions Nothing) $ \xs ->
+        let actual = length xs in
+        if actual == expectedTotal - expectedValid then pure True else do
+            tell @(Doc Void) $ "Unexpected number of invalid transactions:" <+> pretty actual
             pure False
     )
 
@@ -693,7 +717,7 @@ assertAccumState contract inst p nm = TracePredicate $
         let result = p w
         unless result $ do
             tell @(Doc Void) $ vsep
-                [ "Accumulated state of of" <+> pretty inst <> colon
+                [ "Accumulated state of" <+> pretty inst <> colon
                 , indent 2 (viaShow w)
                 , "Failed" <+> squotes (fromString nm)
                 ]

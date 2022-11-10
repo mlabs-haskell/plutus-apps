@@ -37,6 +37,7 @@ import Ledger (POSIXTime, PaymentPubKeyHash, Value)
 import Ledger.Ada qualified as Ada
 import Ledger.Constraints qualified as Constraints
 import Ledger.Constraints.TxConstraints (TxConstraints)
+import Ledger.Interval (Interval (Interval))
 import Ledger.Interval qualified as Interval
 import Ledger.Typed.Scripts qualified as Scripts
 import Ledger.Value qualified as Value
@@ -175,7 +176,13 @@ auctionTransition AuctionParams{apOwner, apAsset, apEndTime, apPayoutTime} State
     -- A new bid is placed, a bidder is only allowed to bid once
     (Ongoing bids, PlaceBid bid)
       | sealedBidBidder bid `notElem` map sealedBidBidder bids ->
-        let constraints = Constraints.mustValidateIn (Interval.to $ apEndTime - 1)
+        -- Correct validity interval should be:
+        -- @
+        --   Interval (LowerBound NegInf True) (Interval.strictUpperBound apEndTime)
+        -- @
+        -- See Note [Validity Interval's upper bound]
+        let validityTimeRange = Interval.to $ apEndTime - 2
+            constraints = Constraints.mustValidateIn validityTimeRange
             newState =
               State
                   { stateData  = Ongoing (bid:bids)
@@ -186,7 +193,11 @@ auctionTransition AuctionParams{apOwner, apAsset, apEndTime, apPayoutTime} State
     -- The first bid is revealed
     (Ongoing bids, RevealBid bid)
       | sealBid bid `elem` bids ->
-        let constraints = Constraints.mustValidateIn (Interval.interval apEndTime (apPayoutTime - 1))
+        let validityTimeRange =
+                Interval
+                    (Interval.lowerBound apEndTime)
+                    (Interval.strictUpperBound apPayoutTime)
+            constraints = Constraints.mustValidateIn validityTimeRange
             newState =
               State
                   { stateData  = AwaitingPayout bid (filter (/= sealBid bid) bids)
@@ -210,7 +221,13 @@ auctionTransition AuctionParams{apOwner, apAsset, apEndTime, apPayoutTime} State
     (AwaitingPayout highestBid sealedBids, RevealBid bid)
       | revealedBid bid > revealedBid highestBid
         && sealBid bid `elem` sealedBids ->
-        let constraints = Constraints.mustValidateIn (Interval.to $ apPayoutTime - 1)
+        -- Correct validity interval should be:
+        -- @
+        --   Interval (LowerBound NegInf True) (Interval.strictUpperBound apPayoutTime)
+        -- @
+        -- See Note [Validity Interval's upper bound]
+        let validityTimeRange = Interval.to apPayoutTime
+            constraints = Constraints.mustValidateIn validityTimeRange
                         <> Constraints.mustPayToPubKey (revealedBidBidder highestBid) (valueOfBid highestBid)
             newState =
               State

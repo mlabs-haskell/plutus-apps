@@ -26,6 +26,7 @@ import Data.Default (Default (..))
 import Data.Foldable
 import Data.Map (Map)
 import Data.Map qualified as Map
+import Data.Text qualified as Text
 import Data.Text.Encoding qualified as T
 import Prettyprinter (Pretty (..), defaultLayoutOptions, layoutPretty, vsep)
 import Prettyprinter.Render.Text (renderStrict)
@@ -87,9 +88,26 @@ tests = testGroup "crowdfunding"
         (walletFundsChange w1 (Ada.adaValueOf 22.5))
         successfulCampaign
 
+    , checkPredicate "cannot make contribution after campaign dealine"
+        (walletFundsChange w1 PlutusTx.zero
+        .&&. assertFailedTransaction (\_ err ->
+            case err of
+                Ledger.CardanoLedgerValidationError msg ->
+                    "OutsideValidityIntervalUTxO" `Text.isInfixOf` msg
+                _ -> False
+            ))
+        $ do
+            void $ Trace.waitUntilSlot $ Slot 20
+            makeContribution w1 (Ada.adaValueOf 10)
+
     , checkPredicate "cannot collect money too late"
         (walletFundsChange w1 PlutusTx.zero
-        .&&. assertNoFailedTransactions)
+        .&&. assertFailedTransaction (\_ err ->
+            case err of
+                Ledger.CardanoLedgerValidationError msg ->
+                    "OutsideValidityIntervalUTxO" `Text.isInfixOf` msg
+                _ -> False
+            ))
         $ do
             ContractHandle{chInstanceId} <- startCampaign
             makeContribution w2 (Ada.adaValueOf 10)
@@ -151,8 +169,14 @@ tests = testGroup "crowdfunding"
         "test/Spec/contractError.txt"
         (pure $ renderWalletLog (void $ Trace.activateContractWallet w1 con))
 
-    , testProperty "QuickCheck ContractModel" $ withMaxSuccess 10 prop_Crowdfunding
+    , testProperty "QuickCheck ContractModel" prop_Crowdfunding
 
+    , testProperty "start-at-slot-20" $ withMaxSuccess 1 $
+        let fixedTestCase = do
+              action $ CContribute w6 (Ada.lovelaceValueOf 20000000)
+              waitUntilDL (Slot 20)
+              action CStart
+        in forAllDL fixedTestCase prop_Crowdfunding
     ]
 
     where
@@ -217,16 +241,27 @@ instance ContractModel CrowdfundingModel where
       withdraw w v
       contributions $~ Map.insert w v
     CStart -> do
-      ownerOnline .= True
+      slot' <- viewModelState currentSlot
+      end <- viewContractState endSlot
+      -- Collecting happens immediately if the campaign deadline has passed
+      if slot' < end
+        then do
+          ownerOnline .= True
+        else do
+          cMap <- viewContractState contributions
+          owner <- viewContractState ownerWallet
+          deposit owner (fold cMap)
+          contributions .= Map.empty
+          ownerContractDone .= True
 
   nextReactiveState slot' = do
     -- If the owner is online and its after the
     -- contribution deadline deadline
     -- they collect all the money
     end <- viewContractState endSlot
-    online  <- viewContractState ownerOnline
+    online <- viewContractState ownerOnline
     when (slot' >= end && online) $ do
-      owner   <- viewContractState ownerWallet
+      owner <- viewContractState ownerWallet
       cMap <- viewContractState contributions
       deposit owner (fold cMap)
       contributions .= Map.empty
@@ -279,4 +314,9 @@ contributorWallets :: [Wallet]
 contributorWallets = [w2, w3, w4, w5, w6, w7, w8, w9, w10]
 
 prop_Crowdfunding :: Actions CrowdfundingModel -> Property
-prop_Crowdfunding = propRunActions_
+prop_Crowdfunding actions = propRunActionsWithOptions
+    (defaultCheckOptionsContractModel & increaseTransactionLimits)
+    defaultCoverageOptions
+    (\ _ -> pure True)
+    actions
+

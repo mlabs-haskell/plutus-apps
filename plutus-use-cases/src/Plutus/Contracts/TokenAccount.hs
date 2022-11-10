@@ -58,7 +58,6 @@ import Ledger.Typed.Scripts (DatumType, RedeemerType, ValidatorTypes)
 import Ledger.Typed.Scripts qualified as Scripts hiding (validatorHash)
 import Ledger.Value (TokenName, Value)
 import Ledger.Value qualified as Value
-import Plutus.Contract.Typed.Tx qualified as TypedTx
 import Plutus.Contracts.Currency qualified as Currency
 import Plutus.Script.Utils.V1.Scripts qualified as PV1
 import Plutus.V1.Ledger.Api (Address, ValidatorHash)
@@ -146,7 +145,7 @@ payTx
     ::
     Value
     -> TxConstraints (Scripts.RedeemerType TokenAccount) (Scripts.DatumType TokenAccount)
-payTx = Constraints.mustPayToTheScript ()
+payTx = Constraints.mustPayToTheScriptWithDatumInTx ()
 
 -- | Pay some money to the given token account
 pay
@@ -176,14 +175,14 @@ redeemTx :: forall w s e.
 redeemTx account pk = mapError (review _TAContractError) $ do
     let inst = typedValidator account
     utxos <- utxosAt (address account)
-    let totalVal = foldMap (view Ledger.ciTxOutValue) utxos
+    let totalVal = foldMap (view Ledger.decoratedTxOutValue) utxos
         numInputs = Map.size utxos
     logInfo @String
         $ "TokenAccount.redeemTx: Redeeming "
             <> show numInputs
             <> " outputs with a total value of "
             <> show totalVal
-    let constraints = TypedTx.collectFromScript utxos ()
+    let constraints = Constraints.collectFromTheScript utxos ()
                 <> Constraints.mustPayToPubKey pk (accountToken account)
         lookups = Constraints.typedValidatorLookups inst
                 <> Constraints.unspentOutputs utxos
@@ -214,7 +213,7 @@ balance
     -> Contract w s e Value
 balance account = mapError (review _TAContractError) $ do
     utxos <- utxosAt (address account)
-    let inner = foldMap (view Ledger.ciTxOutValue) utxos
+    let inner = foldMap (view Ledger.decoratedTxOutValue) utxos
     pure inner
 
 -- | Create a new token and return its 'Account' information.

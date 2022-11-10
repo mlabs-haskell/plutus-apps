@@ -28,7 +28,7 @@ import Test.Tasty (TestTree, testGroup)
 import Ledger qualified
 import Ledger.Ada qualified as Ada
 import Ledger.Constraints qualified as Constraints
-import Ledger.Tx (getCardanoTxId)
+import Ledger.Tx (getCardanoTxId, txOutDatumHash)
 import Plutus.Contract as Con
 import Plutus.Contract.State qualified as State
 import Plutus.Contract.Test (Shrinking (DoShrink, DontShrink), TracePredicate, assertAccumState, assertContractError,
@@ -38,8 +38,8 @@ import Plutus.Contract.Test (Shrinking (DoShrink, DontShrink), TracePredicate, a
                              waitingForSlot, walletFundsChange, (.&&.))
 import Plutus.Contract.Types (ResumableResult (ResumableResult, _finalState), responses)
 import Plutus.Contract.Util (loopM)
+import Plutus.Script.Utils.Scripts (datumHash)
 import Plutus.Script.Utils.V1.Address (mkValidatorAddress)
-import Plutus.Script.Utils.V1.Scripts (datumHash)
 import Plutus.Trace qualified as Trace
 import Plutus.Trace.Emulator (ContractInstanceTag, EmulatorTrace, activateContract, activeEndpoints, callEndpoint)
 import Plutus.Trace.Emulator.Types (ContractInstanceLog (_cilMessage),
@@ -47,7 +47,6 @@ import Plutus.Trace.Emulator.Types (ContractInstanceLog (_cilMessage),
                                     ContractInstanceState (ContractInstanceState, instContractState),
                                     UserThreadMsg (UserLog))
 import Plutus.V1.Ledger.Api (Address, Datum (Datum), DatumHash, Validator)
-import Plutus.V1.Ledger.Tx (TxOut (txOutDatumHash))
 import PlutusTx qualified
 import Prelude hiding (not)
 import Wallet.Emulator qualified as EM

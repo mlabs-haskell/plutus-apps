@@ -54,10 +54,10 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Ledger.Blockchain (OnChainTx (Invalid, Valid))
 import Ledger.Tx (TxIn (txInRef), TxOutRef, getCardanoTxId)
-import Plutus.ChainIndex (ChainIndexQueryEffect, ChainIndexTx (ChainIndexTx, _citxOutputs, _citxTxId),
-                          ChainIndexTxOut (ChainIndexTxOut, citoAddress), ChainIndexTxOutputs (InvalidTx, ValidTx),
-                          RollbackState (Committed), TxOutState (Spent, Unspent), TxValidity (TxInvalid, TxValid),
-                          _ValidTx, citxInputs, citxOutputs, fromOnChainTx, txOutRefs)
+import Plutus.ChainIndex (ChainIndexQueryEffect, ChainIndexTx (_citxTxId),
+                          ChainIndexTxOut (ChainIndexTxOut, citoAddress), RollbackState (Committed),
+                          TxOutState (Spent, Unspent), TxValidity (TxInvalid, TxValid), citxInputs, fromOnChainTx,
+                          txOutRefs, txOuts, validityFromChainIndex)
 import Plutus.Contract (Contract)
 import Plutus.Contract.Effects (PABReq, PABResp (AwaitTxStatusChangeResp), matches)
 import Plutus.Contract.Effects qualified as E
@@ -178,7 +178,7 @@ runInstance networkId contract event = do
                 handleObservableStateRequest sender
                 mkAgentSysCall Normal WaitForMessage >>= runInstance networkId contract
             Just (NewSlot block _) -> do
-                processNewTransactions @w @s @e networkId (join block)
+                processNewTransactions @w @s @e (join block)
                 runInstance networkId contract Nothing
             _ -> waitForNextMessage True >>= runInstance networkId contract
 
@@ -254,12 +254,15 @@ handleBlockchainQueries =
     <> RequestHandler.handleOwnAddressesQueries
     <> RequestHandler.handleOwnInstanceIdQueries
     <> RequestHandler.handleSlotNotifications
-    <> RequestHandler.handleCurrentSlotQueries
+    <> RequestHandler.handleCurrentNodeClientSlotQueries
+    <> RequestHandler.handleCurrentChainIndexSlotQueries
     <> RequestHandler.handleTimeNotifications
     <> RequestHandler.handleCurrentTimeQueries
+    <> RequestHandler.handleCurrentNodeClientTimeRangeQueries
     <> RequestHandler.handleTimeToSlotConversions
     <> RequestHandler.handleYieldedUnbalancedTx
     <> RequestHandler.handleAdjustUnbalancedTx
+    <> RequestHandler.handleGetParams
 
 decodeEvent ::
     forall effs.
@@ -286,13 +289,12 @@ processNewTransactions ::
     , Member (LogMsg ContractInstanceMsg) effs
     , Monoid w
     )
-    => NetworkId
-    -> [OnChainTx]
+    => [OnChainTx]
     -> Eff effs ()
-processNewTransactions networkId txns = do
+processNewTransactions txns = do
     updateTxStatus @w @s @e txns
 
-    let ciTxns = fmap (fromOnChainTx networkId) txns
+    let ciTxns = fmap fromOnChainTx txns
     updateTxOutStatus @w @s @e ciTxns
 
     let blck = indexBlock ciTxns
@@ -343,13 +345,10 @@ updateTxOutStatus txns = do
     -- Check whether the contract instance is waiting for a status change of a
     -- transaction output of any of the new transactions. If that is the case,
     -- call 'addResponse' to sent the response.
-    let getSpentOutputs = Set.toList . Set.map txInRef . view citxInputs
-        -- If the tx is invalid, there is not outputs
-        txWithTxOutStatus tx@ChainIndexTx {_citxTxId, _citxOutputs = InvalidTx} =
-          fmap (, Committed TxInvalid (Spent _citxTxId)) $ getSpentOutputs tx
-        txWithTxOutStatus tx@ChainIndexTx {_citxTxId, _citxOutputs = ValidTx {}} =
-             fmap (, Committed TxValid (Spent _citxTxId)) (getSpentOutputs tx)
-          <> fmap (, Committed TxValid Unspent) (txOutRefs tx)
+    let getSpentOutputs = map txInRef . view citxInputs
+        txWithTxOutStatus tx = let validity = validityFromChainIndex tx in
+             fmap (, Committed validity (Spent (_citxTxId tx))) (getSpentOutputs tx)
+          <> fmap (, Committed validity Unspent) (txOutRefs tx)
         statusMap = Map.fromList $ foldMap txWithTxOutStatus txns
     hks <- mapMaybe (traverse (preview E._AwaitTxOutStatusChangeReq)) <$> getHooks @w @s @e
     let mpReq Request{rqID, itID, rqRequest=txOutRef} =
@@ -533,6 +532,6 @@ indexBlock :: [ChainIndexTx] -> IndexedBlock
 indexBlock = foldMap indexTx where
   indexTx otx =
     IndexedBlock
-      { ibUtxoSpent = Map.fromSet (const otx) $ Set.map txInRef $ view citxInputs otx
-      , ibUtxoProduced = Map.fromListWith (<>) $ view (citxOutputs . _ValidTx) otx >>= (\ChainIndexTxOut{citoAddress} -> [(citoAddress, otx :| [])])
+      { ibUtxoSpent = Map.fromSet (const otx) $ Set.fromList $ map txInRef $ view citxInputs otx
+      , ibUtxoProduced = Map.fromListWith (<>) $ txOuts otx >>= (\ChainIndexTxOut{citoAddress} -> [(citoAddress, otx :| [])])
       }
