@@ -94,7 +94,7 @@
       {
         packages = topLevel.bitte-packages;
         legacyPackages = topLevel;
-      }));
+      })) // { herculesCI.ciSystems = [ "x86_64-linux" ]; };
 
   nixConfig = {
     extra-substituters = [
